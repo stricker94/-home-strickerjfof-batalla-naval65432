@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Batalla Naval — Empresas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-theme="cyan">
+  <div class="bg-scene" aria-hidden="true">
+    <div class="bg-gradient"></div>
+    <div class="bg-caustics"></div>
+    <div class="bg-waves">
+      <div class="wave wave-1"></div>
+      <div class="wave wave-2"></div>
+      <div class="wave wave-3"></div>
+    </div>
+    <div class="bg-particles">
+      <span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <div class="bg-vignette"></div>
+  </div>
+
+  <div id="app">
+    <!-- PANTALLA: Inicio -->
+    <section id="screen-start" class="screen active">
+      <div class="card start-card">
+        <div class="logo">
+          <span class="logo-icon" aria-hidden="true">⚓</span>
+          <h1>Batalla Naval</h1>
+          <p class="tagline">Flotas corporativas · mismo dispositivo u vs CPU</p>
+        </div>
+
+        <div id="continue-row" class="continue-row" hidden>
+          <button type="button" id="btn-continue" class="btn btn-primary btn-lg">Continuar partida</button>
+          <button type="button" id="btn-new-game" class="btn btn-ghost btn-lg">Nueva partida</button>
+        </div>
+
+        <form id="start-form" class="start-form" autocomplete="off">
+          <fieldset class="opt-group">
+            <legend>Modo</legend>
+            <label class="radio-chip">
+              <input type="radio" name="game-mode" value="pvp" checked />
+              <span>2 jugadores</span>
+            </label>
+            <label class="radio-chip">
+              <input type="radio" name="game-mode" value="cpu" />
+              <span>vs CPU</span>
+            </label>
+          </fieldset>
+
+          <div id="cpu-difficulty-wrap" class="opt-group" hidden>
+            <span class="opt-label">Dificultad CPU</span>
+            <div class="chip-row">
+              <label class="radio-chip">
+                <input type="radio" name="cpu-diff" value="easy" checked />
+                <span>Fácil</span>
+              </label>
+              <label class="radio-chip">
+                <input type="radio" name="cpu-diff" value="medium" />
+                <span>Medio</span>
+              </label>
+              <label class="radio-chip">
+                <input type="radio" name="cpu-diff" value="hard" />
+                <span>Difícil</span>
+              </label>
+            </div>
+          </div>
+
+          <fieldset class="opt-group">
+            <legend>Partida</legend>
+            <label class="radio-chip">
+              <input type="radio" name="board-size" value="normal" checked />
+              <span>Normal 10×10</span>
+            </label>
+            <label class="radio-chip">
+              <input type="radio" name="board-size" value="rapida" />
+              <span>Rápida 8×8</span>
+            </label>
+          </fieldset>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="opt-spacing" />
+            <span>Barcos separados</span>
+            <small>Sin tocar (incluye diagonales)</small>
+          </label>
+
+          <fieldset class="opt-group">
+            <legend>Acento del tema</legend>
+            <div class="theme-row">
+              <label class="theme-swatch" title="Cian">
+                <input type="radio" name="theme" value="cyan" checked />
+                <span class="swatch swatch-cyan"></span>
+              </label>
+              <label class="theme-swatch" title="Turquesa">
+                <input type="radio" name="theme" value="teal" />
+                <span class="swatch swatch-teal"></span>
+              </label>
+              <label class="theme-swatch" title="Azul">
+                <input type="radio" name="theme" value="azure" />
+                <span class="swatch swatch-azure"></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <label>
+            Jugador 1
+            <input type="text" id="name-p1" maxlength="20" placeholder="Capitán 1" />
+          </label>
+          <label id="label-p2">
+            Jugador 2
+            <input type="text" id="name-p2" maxlength="20" placeholder="Capitán 2" />
+          </label>
+
+          <button type="submit" class="btn btn-primary btn-lg" id="btn-start">Comenzar partida</button>
+        </form>
+
+        <div class="fleet-preview">
+          <h3 id="fleet-preview-title">La flota (ambos jugadores)</h3>
+          <ul id="fleet-preview-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANTALLA: Handoff / privacidad -->
+    <section id="screen-handoff" class="screen">
+      <div class="card handoff-card">
+        <div class="handoff-icon" aria-hidden="true">📱</div>
+        <h2 id="handoff-title">Pasa el dispositivo</h2>
+        <p id="handoff-msg" class="handoff-msg"></p>
+        <button type="button" id="btn-handoff-ready" class="btn btn-primary btn-lg">Listo</button>
+      </div>
+    </section>
+
+    <!-- PANTALLA: Colocación de barcos -->
+    <section id="screen-placement" class="screen">
+      <header class="topbar panel-bar">
+        <div>
+          <h2 id="placement-title">Coloca tu flota</h2>
+          <p id="placement-subtitle" class="subtitle"></p>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" id="btn-rotate" class="btn btn-secondary" title="Tecla R">↻ Girar (R)</button>
+          <button type="button" id="btn-random" class="btn btn-ghost">Aleatorio</button>
+        </div>
+      </header>
+
+      <div class="placement-layout">
+        <aside class="fleet-panel glass-panel">
+          <h3>Barcos restantes</h3>
+          <ul id="ship-list" class="ship-list"></ul>
+          <p class="hint" id="placement-hint">Selecciona un barco, gira si hace falta y haz clic en el tablero. No se pueden solapar.</p>
+        </aside>
+        <div class="board-wrap glass-panel">
+          <div id="placement-board" class="board" role="grid" aria-label="Tablero de colocación"></div>
+        </div>
+      </div>
+
+      <footer class="bottombar">
+        <button type="button" id="btn-confirm-placement" class="btn btn-primary btn-lg" disabled>
+          Confirmar flota
+        </button>
+      </footer>
+    </section>
+
+    <!-- PANTALLA: Batalla -->
+    <section id="screen-battle" class="screen">
+      <header class="topbar panel-bar">
+        <div>
+          <h2 id="battle-title">Tu turno</h2>
+          <p id="battle-subtitle" class="subtitle">Dispara al tablero enemigo</p>
+        </div>
+        <div id="turn-badge" class="turn-badge">Turno</div>
+      </header>
+
+      <div class="battle-layout">
+        <div class="board-panel glass-panel">
+          <h3 id="enemy-board-label">Tablero enemigo</h3>
+          <div id="enemy-board" class="board board-enemy" role="grid" aria-label="Tablero enemigo"></div>
+        </div>
+        <div class="board-panel glass-panel">
+          <h3 id="own-board-label">Tu flota</h3>
+          <div id="own-board" class="board board-own" role="grid" aria-label="Tu tablero"></div>
+        </div>
+      </div>
+
+      <div id="battle-log" class="battle-log" aria-live="polite"></div>
+
+      <aside class="fleet-status">
+        <div class="fleet-status-col glass-panel">
+          <h4 id="own-fleet-label">Tu flota</h4>
+          <ul id="own-fleet-status"></ul>
+        </div>
+        <div class="fleet-status-col glass-panel">
+          <h4 id="enemy-fleet-label">Flota enemiga</h4>
+          <ul id="enemy-fleet-status"></ul>
+        </div>
+      </aside>
+    </section>
+
+    <!-- PANTALLA: Victoria -->
+    <section id="screen-win" class="screen">
+      <div class="card win-card">
+        <div class="win-trophy" aria-hidden="true">🏆</div>
+        <h2 id="win-title">¡Victoria!</h2>
+        <p id="win-msg" class="win-msg"></p>
+        <div id="win-stats" class="win-stats"></div>
+        <button type="button" id="btn-rematch" class="btn btn-primary btn-lg">Revancha</button>
+        <button type="button" id="btn-home" class="btn btn-ghost">Inicio</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="sunk-banner" class="sunk-banner" role="status" aria-live="assertive" hidden></div>
+  <div id="theater-overlay" class="theater-overlay" hidden aria-hidden="true"></div>
+
+  <div id="hud-controls" class="hud-controls" hidden>
+    <button type="button" id="btn-music" class="btn-hud" aria-pressed="false" title="Música de fondo">
+      <span class="hud-icon" aria-hidden="true">🎵</span>
+      <span class="hud-label">Música</span>
+    </button>
+    <button type="button" id="btn-mute" class="btn-hud btn-mute" aria-pressed="false" title="Silenciar / activar efectos">
+      <span class="mute-icon" aria-hidden="true">🔊</span>
+      <span class="mute-label">Sonido</span>
+    </button>
+    <button type="button" id="btn-large-text" class="btn-hud" aria-pressed="false" title="Texto grande">
+      <span class="hud-icon" aria-hidden="true">Aa</span>
+      <span class="hud-label">Texto</span>
+    </button>
+    <button type="button" id="btn-fullscreen" class="btn-hud" title="Pantalla completa">
+      <span class="hud-icon" aria-hidden="true">⛶</span>
+      <span class="hud-label">Pantalla</span>
+    </button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
