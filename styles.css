@@ -27,7 +27,6 @@
   --shadow-soft: 0 12px 32px rgba(0, 0, 0, 0.35);
   --font: "Outfit", system-ui, -apple-system, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
-  --cell: min(38px, 7.4vw);
   --gap: 4px;
   --board-n: 10;
   --base-font: 16px;
@@ -64,9 +63,9 @@ body[data-theme="azure"] {
   --ship-border: #93c5fd;
 }
 
-body.large-text {
+/* En html para que el tamaño base (rem) cambie de verdad */
+html.large-text {
   --base-font: 18.5px;
-  --cell: min(40px, 7.6vw);
 }
 
 *,
@@ -75,6 +74,11 @@ body.large-text {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* El atributo hidden debe ganar a los display:flex/grid de las clases */
+[hidden] {
+  display: none !important;
 }
 
 html {
@@ -220,7 +224,8 @@ body {
   z-index: 1;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 1.35rem clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
+  /* Espacio superior para los controles fijos (HUD); game.js mide su altura real */
+  padding: var(--hud-space, 4rem) clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
   min-height: 100dvh;
 }
 
@@ -711,7 +716,6 @@ body.large-text #app {
   gap: 1rem;
   margin-bottom: 1.35rem;
   padding: 0.95rem 1.15rem;
-  padding-right: calc(8.5rem + 0.5rem);
   background: var(--bg-card);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -775,10 +779,6 @@ body.large-text #app {
   .placement-layout {
     grid-template-columns: 1fr;
   }
-  .topbar,
-  .panel-bar {
-    padding-right: 1.15rem;
-  }
 }
 
 .fleet-panel {
@@ -828,9 +828,24 @@ body.large-text #app {
 }
 
 .ship-item.placed {
-  opacity: 0.42;
-  cursor: default;
+  opacity: 0.55;
+}
+
+.ship-item.placed:hover {
+  opacity: 0.85;
+  border-color: var(--accent-dim);
+}
+
+.ship-item.placed .ship-name {
   text-decoration: line-through;
+}
+
+.ship-item .ship-placed-tag {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
 }
 
 .ship-item .ship-name-row {
@@ -885,6 +900,8 @@ body.large-text #app {
 }
 
 .board {
+  /* Casilla: máx. 36px y nunca más ancha de lo que cabe en pantalla */
+  --cell: min(36px, calc((100vw - 6.5rem) / var(--board-n) - 4px));
   display: grid;
   grid-template-columns: 30px repeat(var(--board-n), var(--cell));
   grid-template-rows: 30px repeat(var(--board-n), var(--cell));
@@ -1015,13 +1032,13 @@ body.large-text #app {
   background: linear-gradient(145deg, #9f1239, #be123c 60%, #881337);
   border-color: #fb7185;
   box-shadow: 0 0 16px var(--hit-glow), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  animation: sunkPulse 0.65s var(--ease-spring);
 }
 
-@keyframes sunkPulse {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.1); }
-  100% { transform: scale(1); }
+/* Último disparo (sólo resalta; el tablero se re-renderiza en cada turno) */
+.cell.last-shot {
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
+  z-index: 1;
 }
 
 /* Battle layout */
@@ -1039,10 +1056,6 @@ body.large-text #app {
 
   .board-panel:first-child {
     order: -1;
-  }
-
-  .hud-controls {
-    max-width: min(100vw - 1rem, 320px);
   }
 }
 
@@ -1327,7 +1340,7 @@ input:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.4rem;
-  max-width: min(100vw - 1.5rem, 300px);
+  max-width: min(100vw - 1.5rem, 560px);
   padding: 0.35rem;
   border-radius: 999px;
   background: rgba(6, 18, 32, 0.55);
@@ -1335,10 +1348,6 @@ input:focus-visible,
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(148, 163, 184, 0.15);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-}
-
-.hud-controls[hidden] {
-  display: none !important;
 }
 
 .btn-hud {
@@ -1577,22 +1586,7 @@ body.large-text .board .label {
   font-size: 0.75rem;
 }
 
-/* Laptop ~1280 fine-tuning */
-@media (min-width: 1100px) and (max-width: 1400px) {
-  :root {
-    --cell: min(40px, 3.2vw);
-  }
-}
-
 @media (max-width: 960px) {
-  :root {
-    --cell: min(34px, 7vw);
-  }
-
-  #app {
-    padding-top: 1rem;
-  }
-
   .start-card {
     margin-top: 2vh;
   }
@@ -1613,8 +1607,7 @@ body.large-text .board .label {
   .sunk-banner.show,
   .win-card.celebrate,
   .win-confetti span,
-  .board-panel.theater-focus,
-  .cell.sunk {
+  .board-panel.theater-focus {
     animation: none !important;
     transition: none !important;
   }
@@ -1633,4 +1626,96 @@ body.large-text .board .label {
   .btn-hud:hover {
     transform: none;
   }
+}
+
+/* Colocación en móvil: tablero primero y lista de barcos compacta */
+@media (max-width: 900px) {
+  .placement-layout .board-wrap {
+    order: -1;
+    padding: 0.6rem;
+  }
+
+  .ship-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+
+  .ship-item {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .board-panel {
+    padding: 0.8rem 0.6rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .board {
+    --gap: 3px;
+    grid-template-columns: 22px repeat(var(--board-n), var(--cell));
+    grid-template-rows: 22px repeat(var(--board-n), var(--cell));
+  }
+}
+
+/* Batalla en dos columnas: cada tablero dispone de la mitad del ancho */
+@media (min-width: 901px) {
+  .battle-layout .board {
+    --cell: min(36px, calc((min(100vw, 1120px) - 20rem) / (2 * var(--board-n))));
+  }
+}
+
+/* Con movimiento reducido el cartel de hundido se muestra sin animación */
+@media (prefers-reduced-motion: reduce) {
+  .sunk-banner.show {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+/* Filas accesibles del tablero sin romper la rejilla */
+.board-row {
+  display: contents;
+}
+
+/* Récord de partidas */
+.record-line {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+
+.win-card .record-line {
+  margin: 0.2rem 0 1rem;
+  text-align: center;
+}
+
+/* Mira: fila y columna de la casilla apuntada */
+.cell.crosshair:not(.hit):not(.miss):not(:hover):not(:focus-visible) {
+  background: color-mix(in srgb, var(--accent) 24%, rgba(14, 116, 144, 0.35));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Tamaño de los barcos enemigos que siguen a flote */
+.len-dots {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: middle;
+}
+
+.len-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+/* Insignia de turno atenuada mientras juega la CPU */
+.turn-badge.is-cpu {
+  color: var(--mist);
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.12);
+  box-shadow: none;
 }
