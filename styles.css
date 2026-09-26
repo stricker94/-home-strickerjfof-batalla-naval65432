@@ -220,7 +220,8 @@ body {
   z-index: 1;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 1.35rem clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
+  /* Espacio superior para que los controles fijos (HUD) no tapen la cabecera */
+  padding: 4rem clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
   min-height: 100dvh;
 }
 
@@ -828,9 +829,24 @@ body.large-text #app {
 }
 
 .ship-item.placed {
-  opacity: 0.42;
-  cursor: default;
+  opacity: 0.55;
+}
+
+.ship-item.placed:hover {
+  opacity: 0.85;
+  border-color: var(--accent-dim);
+}
+
+.ship-item.placed .ship-name {
   text-decoration: line-through;
+}
+
+.ship-item .ship-placed-tag {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
 }
 
 .ship-item .ship-name-row {
@@ -1015,13 +1031,13 @@ body.large-text #app {
   background: linear-gradient(145deg, #9f1239, #be123c 60%, #881337);
   border-color: #fb7185;
   box-shadow: 0 0 16px var(--hit-glow), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  animation: sunkPulse 0.65s var(--ease-spring);
 }
 
-@keyframes sunkPulse {
-  0% { transform: scale(1); }
-  40% { transform: scale(1.1); }
-  100% { transform: scale(1); }
+/* Último disparo (sólo resalta; el tablero se re-renderiza en cada turno) */
+.cell.last-shot {
+  outline: 2px solid var(--warn);
+  outline-offset: 1px;
+  z-index: 1;
 }
 
 /* Battle layout */
@@ -1327,7 +1343,7 @@ input:focus-visible,
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.4rem;
-  max-width: min(100vw - 1.5rem, 300px);
+  max-width: min(100vw - 1.5rem, 560px);
   padding: 0.35rem;
   border-radius: 999px;
   background: rgba(6, 18, 32, 0.55);
@@ -1337,7 +1353,8 @@ input:focus-visible,
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
 
-.hud-controls[hidden] {
+.hud-controls[hidden],
+.btn-hud[hidden] {
   display: none !important;
 }
 
@@ -1590,7 +1607,7 @@ body.large-text .board .label {
   }
 
   #app {
-    padding-top: 1rem;
+    padding-top: 4rem;
   }
 
   .start-card {
@@ -1613,8 +1630,7 @@ body.large-text .board .label {
   .sunk-banner.show,
   .win-card.celebrate,
   .win-confetti span,
-  .board-panel.theater-focus,
-  .cell.sunk {
+  .board-panel.theater-focus {
     animation: none !important;
     transition: none !important;
   }
@@ -1632,5 +1648,12 @@ body.large-text .board .label {
   .btn:hover:not(:disabled),
   .btn-hud:hover {
     transform: none;
+  }
+}
+
+/* En pantallas estrechas el HUD ocupa dos filas */
+@media (max-width: 600px) {
+  #app {
+    padding-top: 6.2rem;
   }
 }

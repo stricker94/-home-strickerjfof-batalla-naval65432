@@ -57,14 +57,30 @@
     largeText: false,
   };
 
+  // Valores permitidos para las preferencias (evita datos corruptos en localStorage)
+  const PREF_CHOICES = {
+    mode: ["pvp", "cpu"],
+    difficulty: ["easy", "medium", "hard"],
+    boardMode: ["normal", "rapida"],
+    theme: ["cyan", "teal", "azure"],
+  };
+
+  function isValidPref(k, v) {
+    if (PREF_CHOICES[k]) return PREF_CHOICES[k].indexOf(v) !== -1;
+    if (k === "name1" || k === "name2") return typeof v === "string" && v.length <= 20;
+    return typeof v === "boolean";
+  }
+
   function loadPrefs() {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
         const p = JSON.parse(raw);
-        Object.keys(prefs).forEach(function (k) {
-          if (p[k] !== undefined) prefs[k] = p[k];
-        });
+        if (p && typeof p === "object") {
+          Object.keys(prefs).forEach(function (k) {
+            if (isValidPref(k, p[k])) prefs[k] = p[k];
+          });
+        }
       }
       if (localStorage.getItem(MUTE_KEY) === "1") prefs.mute = true;
       if (localStorage.getItem(MUTE_KEY) === "0") prefs.mute = false;
@@ -117,6 +133,7 @@
       attacker: 0,
       awaitingHandoff: false,
       lastResult: null,
+      lastShot: null,
       inputLocked: false,
     },
     cpu: { huntQueue: [], huntHits: [], huntDir: null },
@@ -126,7 +143,25 @@
 
   let placePreview = { cells: null, valid: false };
   let theaterTimer = null;
-  let cpuTimer = null;
+  let confirmingPlacement = false;
+
+  // Temporizadores ligados a la partida en curso: se cancelan al salir o empezar otra,
+  // para que un disparo/turno pendiente no se ejecute sobre una partida distinta.
+  let gameTimers = [];
+
+  function later(fn, ms) {
+    var id = setTimeout(function () {
+      gameTimers = gameTimers.filter(function (t) { return t !== id; });
+      fn();
+    }, ms);
+    gameTimers.push(id);
+    return id;
+  }
+
+  function clearGameTimers() {
+    gameTimers.forEach(function (id) { clearTimeout(id); });
+    gameTimers = [];
+  }
 
   const $ = function (sel) { return document.querySelector(sel); };
   const screens = {
@@ -147,6 +182,9 @@
     screens[name].classList.add("active");
     state.phase = name === "placement" ? "place" : name;
     showHud(true);
+    var menuBtn = $("#btn-menu");
+    if (menuBtn) menuBtn.hidden = name === "start";
+    try { window.scrollTo(0, 0); } catch (e) {}
   }
 
   function showHud(visible) {
@@ -323,12 +361,22 @@
 
   function stopMusicHard() {
     if (musicNodes) {
+      var nodes = musicNodes;
+      var stopAt = 0;
+      // Fundido corto para evitar el "clic" al cortar los osciladores
       try {
-        musicNodes.oscs.forEach(function (o) {
-          try { o.stop(); } catch (e) {}
+        var now = audioCtx.currentTime;
+        nodes.gain.gain.cancelScheduledValues(now);
+        nodes.gain.gain.setValueAtTime(Math.max(nodes.gain.gain.value, 0.0001), now);
+        nodes.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+        stopAt = now + 0.3;
+      } catch (e) {}
+      try {
+        nodes.oscs.forEach(function (o) {
+          try { o.stop(stopAt); } catch (e) {}
         });
-        if (musicNodes.lfo) {
-          try { musicNodes.lfo.stop(); } catch (e) {}
+        if (nodes.lfo) {
+          try { nodes.lfo.stop(stopAt); } catch (e) {}
         }
       } catch (e) {}
       musicNodes = null;
@@ -341,7 +389,7 @@
     if (!ctx || !prefs.music) return;
     stopMusicHard();
     var master = ctx.createGain();
-    master.gain.value = 0.0001;
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
     master.connect(ctx.destination);
     master.gain.exponentialRampToValueAtTime(0.035, ctx.currentTime + 1.2);
 
@@ -429,11 +477,11 @@
     });
   }
 
-  function showSunkBanner(shipName) {
+  function showSunkBanner(text) {
     var el = $("#sunk-banner");
     if (!el) return;
     el.hidden = false;
-    el.textContent = "¡Hundiste " + shipName + "!";
+    el.textContent = text;
     el.classList.remove("show");
     void el.offsetWidth;
     el.classList.add("show");
@@ -712,16 +760,18 @@
     state.cpu = { huntQueue: [], huntHits: [], huntDir: null };
   }
 
-  function neighbors4(r, c) {
+  function inBounds(r, c) {
     var n = boardSize();
+    return r >= 0 && r < n && c >= 0 && c < n;
+  }
+
+  function neighbors4(r, c) {
     return [
       { r: r - 1, c: c },
       { r: r + 1, c: c },
       { r: r, c: c - 1 },
       { r: r, c: c + 1 },
-    ].filter(function (p) {
-      return p.r >= 0 && p.r < n && p.c >= 0 && p.c < n;
-    });
+    ].filter(function (p) { return inBounds(p.r, p.c); });
   }
 
   function unshotCells(attackerIndex) {
@@ -741,6 +791,19 @@
     return list[Math.floor(Math.random() * list.length)];
   }
 
+  function parseKey(k) {
+    var parts = k.split(",");
+    return { r: Number(parts[0]), c: Number(parts[1]) };
+  }
+
+  // Impactos que todavía no forman parte de un barco hundido
+  function openHits(attackerIndex) {
+    var shots = state.players[attackerIndex].shots;
+    return Object.keys(shots)
+      .filter(function (k) { return shots[k] === "hit"; })
+      .map(parseKey);
+  }
+
   function enqueueHuntAround(r, c, attackerIndex) {
     var shots = state.players[attackerIndex].shots;
     neighbors4(r, c).forEach(function (p) {
@@ -754,81 +817,123 @@
 
   function updateCpuAfterShot(result, attackerIndex) {
     if (result.result === "sunk") {
+      // Si quedan impactos de otro barco sin hundir, seguir cazándolo
       state.cpu.huntQueue = [];
-      state.cpu.huntHits = [];
+      state.cpu.huntHits = openHits(attackerIndex);
       state.cpu.huntDir = null;
+      state.cpu.huntHits.forEach(function (h) {
+        enqueueHuntAround(h.r, h.c, attackerIndex);
+      });
       return;
     }
-    if (state.difficulty === "easy") {
-      if (result.result === "hit") {
-        enqueueHuntAround(result.cell.r, result.cell.c, attackerIndex);
-      }
-      return;
-    }
-
-    if (result.result === "miss") {
-      if (state.cpu.huntDir && state.cpu.huntHits.length) {
-        var first = state.cpu.huntHits[0];
-        state.cpu.huntDir = {
-          dr: -state.cpu.huntDir.dr,
-          dc: -state.cpu.huntDir.dc,
-        };
-        state.cpu.huntQueue = [
-          { r: first.r + state.cpu.huntDir.dr, c: first.c + state.cpu.huntDir.dc },
-        ].concat(state.cpu.huntQueue);
-        state.cpu.huntQueue = state.cpu.huntQueue.filter(function (p) {
-          var n = boardSize();
-          return (
-            p.r >= 0 && p.r < n && p.c >= 0 && p.c < n &&
-            !state.players[attackerIndex].shots[key(p.r, p.c)]
-          );
-        });
-      }
-      return;
-    }
-
     if (result.result === "hit") {
       state.cpu.huntHits.push({ r: result.cell.r, c: result.cell.c });
-      if (state.difficulty === "hard" && state.cpu.huntHits.length >= 2) {
-        var a = state.cpu.huntHits[state.cpu.huntHits.length - 2];
-        var b = state.cpu.huntHits[state.cpu.huntHits.length - 1];
-        var dr = b.r - a.r;
-        var dc = b.c - a.c;
-        if (Math.abs(dr) + Math.abs(dc) === 1) {
-          state.cpu.huntDir = { dr: dr, dc: dc };
-          var next = { r: b.r + dr, c: b.c + dc };
-          state.cpu.huntQueue = [next].concat(
-            state.cpu.huntQueue.filter(function (p) {
-              return !(p.r === next.r && p.c === next.c);
-            })
-          );
+      if (state.difficulty === "medium") {
+        // Si dos impactos están alineados, priorizar seguir esa línea
+        var hits = state.cpu.huntHits;
+        var b = hits[hits.length - 1];
+        var a = hits.find(function (h) {
+          return Math.abs(h.r - b.r) + Math.abs(h.c - b.c) === 1;
+        });
+        if (a) {
+          var dr = b.r - a.r;
+          var dc = b.c - a.c;
+          var ahead = { r: b.r + dr, c: b.c + dc };
+          var behind = { r: a.r - dr, c: a.c - dc };
+          var shots = state.players[attackerIndex].shots;
+          var line = [ahead, behind].filter(function (p) {
+            return inBounds(p.r, p.c) && !shots[key(p.r, p.c)];
+          });
+          state.cpu.huntQueue = line.concat(state.cpu.huntQueue);
         }
       }
       enqueueHuntAround(result.cell.r, result.cell.c, attackerIndex);
-      return;
     }
-
   }
 
-  function scoreHardTarget(cell, attackerIndex) {
+  // IA difícil: mapa de probabilidad. Para cada barco enemigo aún a flote cuenta
+  // cuántas colocaciones posibles cubren cada casilla libre; si hay impactos
+  // pendientes, sólo cuenta las colocaciones que pasan por ellos (y las pondera).
+  function chooseHardShot(attackerIndex) {
     var shots = state.players[attackerIndex].shots;
-    var score = (cell.r + cell.c) % 2 === 0 ? 2 : 0;
-    var missAdj = 0;
-    neighbors4(cell.r, cell.c).forEach(function (p) {
-      if (shots[key(p.r, p.c)] === "miss") missAdj++;
+    var defender = opponentOf(attackerIndex);
+    var n = boardSize();
+    var lengths = state.players[defender].ships
+      .filter(function (s) { return !s.sunk; })
+      .map(function (s) { return s.length; });
+
+    var blocked = {};
+    Object.keys(shots).forEach(function (k) {
+      if (shots[k] === "miss" || shots[k] === "sunk") blocked[k] = true;
     });
-    score -= missAdj * 0.5;
-    var open = neighbors4(cell.r, cell.c).filter(function (p) {
-      return !shots[key(p.r, p.c)];
-    }).length;
-    score += open * 0.25;
-    return score;
+    if (state.spacing) {
+      // Con barcos separados, ninguna casilla alrededor de un hundido puede tener barco
+      Object.keys(shots).forEach(function (k) {
+        if (shots[k] !== "sunk") return;
+        var p = parseKey(k);
+        for (var dr = -1; dr <= 1; dr++) {
+          for (var dc = -1; dc <= 1; dc++) {
+            if (inBounds(p.r + dr, p.c + dc)) blocked[key(p.r + dr, p.c + dc)] = true;
+          }
+        }
+      });
+    }
+
+    function buildWeights(targeting) {
+      var weights = {};
+      var any = false;
+      lengths.forEach(function (len) {
+        ["H", "V"].forEach(function (o) {
+          var maxR = o === "H" ? n : n - len + 1;
+          var maxC = o === "H" ? n - len + 1 : n;
+          for (var r = 0; r < maxR; r++) {
+            for (var c = 0; c < maxC; c++) {
+              var cells = getShipCells(r, c, len, o);
+              var covered = 0;
+              var ok = true;
+              for (var i = 0; i < cells.length; i++) {
+                var k = key(cells[i].r, cells[i].c);
+                if (blocked[k]) { ok = false; break; }
+                if (shots[k] === "hit") covered++;
+              }
+              if (!ok || (targeting && covered === 0)) continue;
+              var w = targeting ? Math.pow(8, covered) : 1;
+              cells.forEach(function (cell) {
+                var ck = key(cell.r, cell.c);
+                if (shots[ck]) return;
+                weights[ck] = (weights[ck] || 0) + w;
+                any = true;
+              });
+            }
+          }
+        });
+      });
+      return any ? weights : null;
+    }
+
+    var hasHits = Object.keys(shots).some(function (k) { return shots[k] === "hit"; });
+    var weights = (hasHits && buildWeights(true)) || buildWeights(false);
+    if (!weights) return pickRandom(unshotCells(attackerIndex));
+
+    var best = [];
+    var bestW = -1;
+    Object.keys(weights).forEach(function (k) {
+      if (weights[k] > bestW) {
+        bestW = weights[k];
+        best = [k];
+      } else if (weights[k] === bestW) {
+        best.push(k);
+      }
+    });
+    return parseKey(pickRandom(best));
   }
 
   function chooseCpuShot(attackerIndex) {
     var shots = state.players[attackerIndex].shots;
     var open = unshotCells(attackerIndex);
     if (!open.length) return null;
+
+    if (state.difficulty === "hard") return chooseHardShot(attackerIndex);
 
     if (state.difficulty === "easy") {
       if (state.cpu.huntQueue.length && Math.random() < 0.1) {
@@ -842,36 +947,16 @@
 
     while (state.cpu.huntQueue.length) {
       var h = state.cpu.huntQueue.shift();
-      if (!shots[key(h.r, h.c)]) return h;
+      if (inBounds(h.r, h.c) && !shots[key(h.r, h.c)]) return h;
     }
 
-    if (state.difficulty === "hard" && state.cpu.huntHits.length) {
-      var lastHit = state.cpu.huntHits[state.cpu.huntHits.length - 1];
-      enqueueHuntAround(lastHit.r, lastHit.c, attackerIndex);
-      while (state.cpu.huntQueue.length) {
-        var h2 = state.cpu.huntQueue.shift();
-        if (!shots[key(h2.r, h2.c)]) return h2;
-      }
-    }
-
-    if (state.difficulty === "hard") {
-      var best = null;
-      var bestScore = -Infinity;
-      open.forEach(function (cell) {
-        var sc = scoreHardTarget(cell, attackerIndex) + Math.random() * 0.3;
-        if (sc > bestScore) {
-          bestScore = sc;
-          best = cell;
-        }
-      });
-      return best;
-    }
-
-    return pickRandom(open);
+    // Medio: en modo búsqueda dispara en patrón de tablero de ajedrez
+    var parity = open.filter(function (p) { return (p.r + p.c) % 2 === 0; });
+    return pickRandom(parity.length ? parity : open);
   }
 
   // ——— Guardar / reanudar ———
-  function serializeState() {
+  function serializeState(phase) {
     return {
       v: 2,
       mode: state.mode,
@@ -879,7 +964,7 @@
       boardSize: state.boardSize,
       boardMode: state.boardMode,
       spacing: state.spacing,
-      phase: state.phase,
+      phase: phase,
       players: state.players.map(function (p) {
         return {
           name: p.name,
@@ -890,10 +975,11 @@
           stats: p.stats,
         };
       }),
-      placing: state.phase === "place" ? state.placing : null,
+      placing: phase === "place" ? state.placing : null,
       battle: {
         attacker: state.battle.attacker,
         lastResult: state.battle.lastResult,
+        lastShot: state.battle.lastShot,
       },
       cpu: state.cpu,
       winner: state.winner,
@@ -901,10 +987,13 @@
     };
   }
 
-  function saveGame() {
+  // phase: fase a guardar; por defecto la actual. Se pasa explícita cuando se guarda
+  // justo antes de una pantalla de "pasa el dispositivo".
+  function saveGame(phase) {
+    phase = phase || state.phase;
     try {
-      if (state.phase === "place" || state.phase === "battle") {
-        localStorage.setItem(SAVE_KEY, JSON.stringify(serializeState()));
+      if (phase === "place" || phase === "battle") {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(serializeState(phase)));
       }
     } catch (e) {}
   }
@@ -922,6 +1011,15 @@
       if (!data || data.v !== 2) return null;
       if (!data.players || data.players.length !== 2) return null;
       if (data.phase !== "place" && data.phase !== "battle") return null;
+      if (data.mode !== "pvp" && data.mode !== "cpu") return null;
+      if (data.boardSize !== 8 && data.boardSize !== 10) return null;
+      if (data.phase === "place" && (!data.placing || !Array.isArray(data.placing.ships))) return null;
+      if (data.phase === "battle") {
+        var boardsOk = data.players.every(function (p) {
+          return Array.isArray(p.board) && p.board.length === data.boardSize && Array.isArray(p.ships);
+        });
+        if (!boardsOk) return null;
+      }
       return data;
     } catch (e) {
       return null;
@@ -931,6 +1029,8 @@
   function hasValidSave() { return !!loadSave(); }
 
   function applySave(data) {
+    clearGameTimers();
+    clearTheater();
     state.mode = data.mode;
     state.difficulty = data.difficulty || "easy";
     state.boardSize = data.boardSize || 10;
@@ -954,19 +1054,40 @@
     state.battle.inputLocked = false;
     state.battle.attacker = (data.battle && data.battle.attacker) || 0;
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
+    state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
 
-    if (data.phase === "place" && data.placing) {
+    if (data.phase === "place") {
       state.placing = data.placing;
-      placePreview = { cells: null, valid: false };
-      showScreen("placement");
-      $("#placement-title").textContent = playerLabel(state.placing.playerIndex) + ": coloca tu flota";
-      $("#placement-subtitle").textContent = "Selecciona un barco, gira (R) y haz clic en el tablero.";
-      updatePlacementHint();
-      renderPlacement();
+      if (!state.placing.selectedShipId) {
+        var next = state.placing.ships.find(function (s) { return !s.cells.length; });
+        state.placing.selectedShipId = next ? next.id : null;
+      }
+      if (isCpuMode()) {
+        showPlacement();
+      } else {
+        // En 2 jugadores, nunca mostrar una flota sin pasar antes por la pantalla de privacidad
+        showHandoff(
+          "Partida reanudada",
+          "Continúa la colocación de <strong>" +
+            escapeHtml(playerLabel(state.placing.playerIndex)) +
+            "</strong>.<br>El otro jugador no debe mirar.<br><br>Pulsa <strong>Listo</strong> para continuar.",
+          showPlacement
+        );
+      }
     } else if (data.phase === "battle") {
-      showBattleFor(state.battle.attacker);
-      if (isCpuMode() && state.players[state.battle.attacker].isCpu) {
-        scheduleCpuTurn();
+      var attacker = state.battle.attacker;
+      var resumed = state.turnCount > 0;
+      if (isCpuMode()) {
+        showBattleFor(attacker, resumed);
+        if (state.players[attacker].isCpu) scheduleCpuTurn();
+      } else {
+        showHandoff(
+          "Partida reanudada",
+          "Le toca disparar a <strong>" +
+            escapeHtml(playerLabel(attacker)) +
+            "</strong>.<br>Entrégale el dispositivo y pulsa <strong>Listo</strong>.",
+          function () { showBattleFor(attacker, resumed); }
+        );
       }
     }
   }
@@ -1013,18 +1134,100 @@
       .join("");
   }
 
+  function cellSelector(r, c) {
+    return '.cell[data-r="' + r + '"][data-c="' + c + '"]';
+  }
+
+  function cellFromEvent(container, e) {
+    var el = e.target && e.target.closest ? e.target.closest(".cell") : null;
+    return el && container.contains(el) ? el : null;
+  }
+
+  // Los eventos se delegan en el contenedor (una sola vez por tablero) en lugar de
+  // añadir varios listeners a cada casilla en cada render.
+  function bindBoardEvents(container) {
+    if (container._bound) return;
+    container._bound = true;
+    var lastHover = null;
+
+    container.addEventListener("click", function (e) {
+      var el = cellFromEvent(container, e);
+      var o = container._opts;
+      if (!el || !o || !o.interactive || !el.classList.contains("interactive")) return;
+      if (o.onCellClick) o.onCellClick(Number(el.dataset.r), Number(el.dataset.c));
+    });
+
+    container.addEventListener("mouseover", function (e) {
+      var el = cellFromEvent(container, e);
+      var o = container._opts;
+      if (!el || el === lastHover || !o || !o.onCellHover) return;
+      lastHover = el;
+      o.onCellHover(Number(el.dataset.r), Number(el.dataset.c));
+    });
+
+    container.addEventListener("mouseleave", function () {
+      lastHover = null;
+      var o = container._opts;
+      if (o && o.onCellLeave) o.onCellLeave();
+    });
+
+    container.addEventListener("focusin", function (e) {
+      var el = cellFromEvent(container, e);
+      var o = container._opts;
+      if (el && o && o.onCellHover) o.onCellHover(Number(el.dataset.r), Number(el.dataset.c));
+    });
+
+    container.addEventListener("keydown", function (e) {
+      var el = cellFromEvent(container, e);
+      var o = container._opts;
+      if (!el || !o) return;
+      var r = Number(el.dataset.r);
+      var c = Number(el.dataset.c);
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (o.interactive && el.classList.contains("interactive") && o.onCellClick) {
+          o.onCellClick(r, c);
+        }
+        return;
+      }
+      var moves = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+      var mv = moves[e.key];
+      if (!mv) return;
+      e.preventDefault();
+      var target = container.querySelector(cellSelector(r + mv[0], c + mv[1]));
+      if (target) target.focus();
+    });
+  }
+
+  function cellStateLabel(value) {
+    if (value === "miss") return "agua";
+    if (value === "hit") return "tocado";
+    if (value === "sunk") return "hundido";
+    return "";
+  }
+
   function buildBoard(container, options) {
     var mode = options.mode;
     var occupied = options.occupied;
     var shots = options.shots;
     var interactive = options.interactive;
-    var onCellClick = options.onCellClick;
-    var onCellHover = options.onCellHover;
-    var onCellLeave = options.onCellLeave;
     var previewCells = options.previewCells;
     var previewValid = options.previewValid;
+    var lastShot = options.lastShot;
     var n = boardSize();
     var letters = cols();
+
+    // Conservar el foco del teclado entre renders
+    var active = document.activeElement;
+    var focusR = null;
+    var focusC = null;
+    if (active && container.contains(active) && active.classList.contains("cell")) {
+      focusR = active.dataset.r;
+      focusC = active.dataset.c;
+    }
+
+    container._opts = options;
+    bindBoardEvents(container);
 
     container.innerHTML = "";
     container.style.setProperty("--board-n", String(n));
@@ -1033,100 +1236,77 @@
       "min(36px, " + (mode === "place" ? "7.2vw" : n <= 8 ? "7vw" : "6.2vw") + ")"
     );
 
+    var frag = document.createDocumentFragment();
     var corner = document.createElement("div");
     corner.className = "corner";
-    container.appendChild(corner);
+    frag.appendChild(corner);
 
     letters.forEach(function (letter) {
       var lab = document.createElement("div");
       lab.className = "label";
       lab.textContent = letter;
-      container.appendChild(lab);
+      lab.setAttribute("aria-hidden", "true");
+      frag.appendChild(lab);
     });
+
+    var previewSet = {};
+    (previewCells || []).forEach(function (p) { previewSet[key(p.r, p.c)] = true; });
 
     for (var r = 0; r < n; r++) {
       var rowLab = document.createElement("div");
       rowLab.className = "label";
       rowLab.textContent = String(r + 1);
-      container.appendChild(rowLab);
+      rowLab.setAttribute("aria-hidden", "true");
+      frag.appendChild(rowLab);
 
       for (var c = 0; c < n; c++) {
         var cell = document.createElement("div");
+        var k = key(r, c);
+        var shot = shots ? shots[k] : null;
+        var labelParts = [letters[c] + (r + 1)];
+
         cell.className = "cell";
         cell.dataset.r = String(r);
         cell.dataset.c = String(c);
         cell.setAttribute("role", "gridcell");
-        cell.setAttribute("aria-label", letters[c] + (r + 1));
 
-        var k = key(r, c);
+        if ((mode === "place" || mode === "own") && occupied && occupied[k]) {
+          cell.classList.add("ship");
+          cell.style.setProperty("--ship-color", companyColor(occupied[k]));
+          if (mode === "place") labelParts.push("barco");
+        }
 
-        if (mode === "place") {
-          if (occupied && occupied[k]) {
-            cell.classList.add("ship");
-            cell.style.setProperty("--ship-color", companyColor(occupied[k]));
-          }
-          if (previewCells) {
-            var inPrev = previewCells.some(function (p) {
-              return p.r === r && p.c === c;
-            });
-            if (inPrev) {
-              cell.classList.add("ship-preview");
-              if (!previewValid) cell.classList.add("invalid");
-            }
+        if (mode === "place" && previewSet[k]) {
+          cell.classList.add("ship-preview");
+          if (!previewValid) cell.classList.add("invalid");
+        }
+
+        if (mode === "own" || mode === "enemy") {
+          if (shot === "miss") cell.classList.add("miss");
+          if (shot === "hit") cell.classList.add("hit");
+          if (shot === "sunk") cell.classList.add("hit", "sunk");
+          if (shot) labelParts.push(cellStateLabel(shot));
+          if (lastShot && lastShot.r === r && lastShot.c === c) cell.classList.add("last-shot");
+        }
+
+        if (interactive) {
+          if (!shot) {
+            cell.classList.add("interactive");
+            cell.tabIndex = 0;
+          } else {
+            cell.tabIndex = -1;
           }
         }
 
-        if (mode === "own") {
-          if (occupied && occupied[k]) {
-            cell.classList.add("ship");
-            cell.style.setProperty("--ship-color", companyColor(occupied[k]));
-          }
-          if (shots && shots[k] === "miss") cell.classList.add("miss");
-          if (shots && (shots[k] === "hit" || shots[k] === "sunk")) {
-            cell.classList.add("hit");
-            if (shots[k] === "sunk") cell.classList.add("sunk");
-          }
-        }
-
-        if (mode === "enemy") {
-          if (shots && shots[k] === "miss") cell.classList.add("miss");
-          if (shots && shots[k] === "hit") cell.classList.add("hit");
-          if (shots && shots[k] === "sunk") cell.classList.add("hit", "sunk");
-        }
-
-        if (interactive && !(shots && shots[k])) {
-          cell.classList.add("interactive");
-          cell.tabIndex = 0;
-          (function (rr, cc) {
-            if (onCellClick) {
-              cell.addEventListener("click", function () { onCellClick(rr, cc); });
-              cell.addEventListener("keydown", function (e) {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onCellClick(rr, cc);
-                }
-              });
-            }
-            if (onCellHover) {
-              cell.addEventListener("mouseenter", function () { onCellHover(rr, cc); });
-            }
-          })(r, c);
-          if (onCellLeave) {
-            cell.addEventListener("mouseleave", function () { onCellLeave(); });
-          }
-        } else {
-          if (onCellHover) {
-            (function (rr, cc) {
-              cell.addEventListener("mouseenter", function () { onCellHover(rr, cc); });
-            })(r, c);
-          }
-          if (onCellLeave) {
-            cell.addEventListener("mouseleave", function () { onCellLeave(); });
-          }
-        }
-
-        container.appendChild(cell);
+        cell.setAttribute("aria-label", labelParts.join(", "));
+        frag.appendChild(cell);
       }
+    }
+    container.appendChild(frag);
+
+    if (focusR !== null) {
+      var again = container.querySelector(cellSelector(focusR, focusC));
+      if (again && again.tabIndex >= -1) again.focus({ preventScroll: true });
     }
   }
 
@@ -1138,7 +1318,7 @@
       : "Selecciona un barco, gira si hace falta y haz clic en el tablero. No se pueden solapar.";
   }
 
-  function startPlacement(playerIndex) {
+  function preparePlacement(playerIndex) {
     state.placing = {
       playerIndex: playerIndex,
       selectedShipId: fleetTemplate()[0].id,
@@ -1147,12 +1327,42 @@
       occupied: {},
     };
     placePreview = { cells: null, valid: false };
+  }
+
+  function showPlacement() {
+    confirmingPlacement = false;
+    placePreview = { cells: null, valid: false };
     showScreen("placement");
-    $("#placement-title").textContent = playerLabel(playerIndex) + ": coloca tu flota";
+    $("#placement-title").textContent = playerLabel(state.placing.playerIndex) + ": coloca tu flota";
     $("#placement-subtitle").textContent =
-      "Selecciona un barco, gira (R) y haz clic en el tablero.";
+      "Selecciona un barco, gira (R) y haz clic en el tablero. Clic en un barco colocado para moverlo.";
     updatePlacementHint();
     renderPlacement();
+    saveGame();
+  }
+
+  function startPlacement(playerIndex) {
+    preparePlacement(playerIndex);
+    showPlacement();
+  }
+
+  function selectShipForPlacement(shipId) {
+    state.placing.selectedShipId = shipId;
+    placePreview = { cells: null, valid: false };
+    renderPlacement();
+  }
+
+  // Quita un barco ya colocado del tablero y lo deja seleccionado para recolocarlo
+  function pickUpShip(shipId) {
+    var ship = state.placing.ships.find(function (s) { return s.id === shipId; });
+    if (!ship || !ship.cells.length) return;
+    if (ship.cells.length > 1) {
+      state.placing.orientation = ship.cells[0].r === ship.cells[1].r ? "H" : "V";
+    }
+    removeShipFromPlacing(shipId);
+    playSfx("click");
+    toast("Recolocando " + ship.name, 1400);
+    selectShipForPlacement(shipId);
     saveGame();
   }
 
@@ -1165,11 +1375,14 @@
       btn.type = "button";
       btn.className = "ship-item";
       btn.style.setProperty("--ship-color", companyColor(ship.id));
-      if (ship.cells.length) btn.classList.add("placed");
+      if (ship.cells.length) {
+        btn.classList.add("placed");
+        btn.title = "Quitar del tablero para recolocarlo";
+      }
       if (state.placing.selectedShipId === ship.id && !ship.cells.length) {
         btn.classList.add("selected");
+        btn.setAttribute("aria-pressed", "true");
       }
-      if (ship.cells.length) btn.disabled = true;
 
       var dots = Array.from({ length: ship.length })
         .map(function () {
@@ -1186,36 +1399,29 @@
         companyColor(ship.id) +
         '"></span><span class="ship-name">' +
         escapeHtml(ship.name) +
-        '</span></span><span class="ship-cells">' +
+        "</span>" +
+        (ship.cells.length ? '<span class="ship-placed-tag">✓ mover</span>' : "") +
+        '</span><span class="ship-cells">' +
         dots +
         "</span>";
 
-      if (!ship.cells.length) {
-        btn.addEventListener("click", function () {
+      btn.addEventListener("click", function () {
+        if (ship.cells.length) {
+          pickUpShip(ship.id);
+        } else {
           playSfx("click");
-          state.placing.selectedShipId = ship.id;
-          placePreview = { cells: null, valid: false };
-          renderPlacement();
-        });
-      }
+          selectShipForPlacement(ship.id);
+        }
+      });
       list.appendChild(btn);
     });
 
-    buildBoard($("#placement-board"), {
-      mode: "place",
-      occupied: state.placing.occupied,
-      previewCells: placePreview.cells,
-      previewValid: placePreview.valid,
-      interactive: true,
-      onCellClick: onPlaceClick,
-      onCellHover: onPlaceHover,
-      onCellLeave: function () {
-        placePreview = { cells: null, valid: false };
-        renderPlacementBoardOnly();
-      },
-    });
-
+    renderPlacementBoardOnly();
     $("#btn-confirm-placement").disabled = !allShipsPlaced();
+    var clearBtn = $("#btn-clear-placement");
+    if (clearBtn) {
+      clearBtn.disabled = !state.placing.ships.some(function (s) { return s.cells.length; });
+    }
   }
 
   function renderPlacementBoardOnly() {
@@ -1229,38 +1435,55 @@
       onCellHover: onPlaceHover,
       onCellLeave: function () {
         placePreview = { cells: null, valid: false };
-        renderPlacementBoardOnly();
+        paintPlacementPreview();
       },
+    });
+  }
+
+  // Actualiza sólo las clases de vista previa, sin reconstruir el tablero
+  function paintPlacementPreview() {
+    var board = $("#placement-board");
+    board.querySelectorAll(".cell.ship-preview").forEach(function (el) {
+      el.classList.remove("ship-preview", "invalid");
+    });
+    (placePreview.cells || []).forEach(function (p) {
+      var el = board.querySelector(cellSelector(p.r, p.c));
+      if (!el) return;
+      el.classList.add("ship-preview");
+      if (!placePreview.valid) el.classList.add("invalid");
     });
   }
 
   function onPlaceHover(r, c) {
     var id = state.placing.selectedShipId;
-    if (!id) {
+    var ship = id && state.placing.ships.find(function (s) { return s.id === id; });
+    if (!ship || ship.cells.length) {
       placePreview = { cells: null, valid: false };
-      renderPlacementBoardOnly();
-      return;
+    } else {
+      var cells = getShipCells(r, c, ship.length, state.placing.orientation);
+      placePreview = { cells: cells, valid: canPlace(cells, state.placing.occupied, null), anchor: { r: r, c: c } };
     }
-    var ship = state.placing.ships.find(function (s) { return s.id === id; });
-    if (!ship || ship.cells.length) return;
-    var cells = getShipCells(r, c, ship.length, state.placing.orientation);
-    placePreview = { cells: cells, valid: canPlace(cells, state.placing.occupied, null) };
-    renderPlacementBoardOnly();
+    paintPlacementPreview();
   }
 
   function onPlaceClick(r, c) {
+    var occupant = state.placing.occupied[key(r, c)];
+    if (occupant) {
+      // Clic sobre un barco colocado: recogerlo para moverlo
+      pickUpShip(occupant);
+      return;
+    }
     var id = state.placing.selectedShipId;
-    if (!id) {
+    var ship = id && state.placing.ships.find(function (s) { return s.id === id; });
+    if (!ship || ship.cells.length) {
       toast("Selecciona un barco de la lista");
       return;
     }
-    var ship = state.placing.ships.find(function (s) { return s.id === id; });
-    if (!ship || ship.cells.length) return;
     if (!placeShipOnPlacing(id, r, c)) {
       toast(
         state.spacing
-          ? "No cabe — gira, deja espacio o elige otra casilla"
-          : "No cabe ahí — gira o elige otra casilla"
+          ? "No cabe: gira, deja espacio o elige otra casilla"
+          : "No cabe ahí: gira o elige otra casilla"
       );
       return;
     }
@@ -1278,8 +1501,10 @@
       state.placing.orientation === "H" ? "Orientación: horizontal" : "Orientación: vertical",
       1200
     );
-    placePreview = { cells: null, valid: false };
-    renderPlacementBoardOnly();
+    // Recalcular la vista previa en la misma casilla con la nueva orientación
+    var anchor = placePreview.anchor;
+    if (anchor) onPlaceHover(anchor.r, anchor.c);
+    else paintPlacementPreview();
   }
 
   function showHandoff(title, message, nextAction) {
@@ -1287,6 +1512,8 @@
     $("#handoff-title").textContent = title;
     $("#handoff-msg").innerHTML = message;
     showScreen("handoff");
+    var ready = $("#btn-handoff-ready");
+    if (ready) ready.focus({ preventScroll: true });
   }
 
   // ——— Batalla ———
@@ -1308,114 +1535,101 @@
       .join("");
   }
 
-  function renderPvpBoards(attackerIndex) {
-    var defender = opponentOf(attackerIndex);
-    var ownOccupied = {};
-    state.players[attackerIndex].ships.forEach(function (ship) {
+  function occupiedMap(ships) {
+    var map = {};
+    ships.forEach(function (ship) {
       ship.cells.forEach(function (cell) {
-        ownOccupied[key(cell.r, cell.c)] = ship.id;
+        map[key(cell.r, cell.c)] = ship.id;
       });
     });
-    var canShoot =
-      !state.battle.awaitingHandoff &&
-      !state.battle.inputLocked &&
-      !state.players[attackerIndex].isCpu;
-
-    buildBoard($("#own-board"), {
-      mode: "own",
-      occupied: ownOccupied,
-      shots: state.players[defender].shots,
-      interactive: false,
-    });
-    buildBoard($("#enemy-board"), {
-      mode: "enemy",
-      shots: state.players[attackerIndex].shots,
-      interactive: canShoot,
-      onCellClick: onFireClick,
-    });
-    $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[attackerIndex].ships, true);
-    $("#enemy-fleet-status").innerHTML = fleetStatusHtml(state.players[defender].ships, false);
+    return map;
   }
 
-  function renderCpuHumanView(canShoot) {
-    var human = 0;
-    var cpu = 1;
-    var ownOccupied = {};
-    state.players[human].ships.forEach(function (ship) {
-      ship.cells.forEach(function (cell) {
-        ownOccupied[key(cell.r, cell.c)] = ship.id;
-      });
-    });
+  // viewer: jugador cuyo punto de vista se muestra (su flota abajo, el enemigo arriba)
+  function renderBattleBoards(viewer, canShoot) {
+    var enemy = opponentOf(viewer);
+    var last = state.battle.lastShot;
     buildBoard($("#own-board"), {
       mode: "own",
-      occupied: ownOccupied,
-      shots: state.players[cpu].shots,
+      occupied: occupiedMap(state.players[viewer].ships),
+      shots: state.players[enemy].shots,
       interactive: false,
+      lastShot: last && last.by === enemy ? last : null,
     });
     buildBoard($("#enemy-board"), {
       mode: "enemy",
-      shots: state.players[human].shots,
+      shots: state.players[viewer].shots,
       interactive: !!canShoot,
       onCellClick: onFireClick,
+      lastShot: last && last.by === viewer ? last : null,
     });
-    $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[human].ships, true);
-    $("#enemy-fleet-status").innerHTML = fleetStatusHtml(state.players[cpu].ships, false);
+    $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[viewer].ships, true);
+    $("#enemy-fleet-status").innerHTML = fleetStatusHtml(state.players[enemy].ships, false);
   }
 
-  function startBattle() {
+  // En modo CPU la vista es siempre la del humano (jugador 0)
+  function battleViewer(attackerIndex) {
+    return isCpuMode() ? 0 : attackerIndex;
+  }
+
+  function resetBattleState() {
     state.battle.attacker = 0;
     state.battle.awaitingHandoff = false;
     state.battle.inputLocked = false;
     state.battle.lastResult = null;
+    state.battle.lastShot = null;
     state.turnCount = 0;
     resetCpuAi();
+  }
+
+  function startBattle() {
+    resetBattleState();
     showBattleFor(0);
     saveGame();
   }
 
-  function showBattleFor(attackerIndex) {
+  // resumed: true al reanudar una partida guardada (no cuenta un turno nuevo)
+  function showBattleFor(attackerIndex, resumed) {
     state.battle.attacker = attackerIndex;
+    state.battle.awaitingHandoff = false;
     state.battle.inputLocked = !!state.players[attackerIndex].isCpu;
-    state.players[attackerIndex].stats.turns += 1;
-    state.turnCount += 1;
+    if (!resumed) {
+      state.players[attackerIndex].stats.turns += 1;
+      state.turnCount += 1;
+    }
     showScreen("battle");
 
     var attacker = state.players[attackerIndex];
-    $("#battle-title").textContent = "Turno de " + attacker.name;
+    var viewer = battleViewer(attackerIndex);
+    var enemy = state.players[opponentOf(viewer)];
+    var isCpuTurn = attacker.isCpu;
+
+    $("#battle-title").textContent = isCpuMode() && !isCpuTurn ? "Tu turno" : "Turno de " + attacker.name;
     $("#turn-badge").textContent = attacker.name;
+    $("#turn-badge").classList.toggle("is-cpu", isCpuTurn);
+    $("#battle-subtitle").textContent = isCpuTurn
+      ? "La CPU está apuntando…"
+      : "Haz clic (o usa flechas + Enter) en el tablero enemigo para disparar.";
+    $("#enemy-board-label").textContent = "Tablero de " + enemy.name;
+    $("#own-board-label").textContent = "Tu flota (" + state.players[viewer].name + ")";
+    $("#own-fleet-label").textContent = "Tu flota";
+    $("#enemy-fleet-label").textContent = "Flota de " + enemy.name;
 
     var log = $("#battle-log");
     log.className = "battle-log";
-
-    if (isCpuMode()) {
-      var human = 0;
-      var cpu = 1;
-      $("#battle-subtitle").textContent = attacker.isCpu
-        ? "La CPU está disparando…"
-        : "Haz clic en el tablero enemigo para disparar.";
-      $("#enemy-board-label").textContent = "Tablero de " + state.players[cpu].name;
-      $("#own-board-label").textContent = "Tu flota (" + state.players[human].name + ")";
-      $("#own-fleet-label").textContent = "Tu flota";
-      $("#enemy-fleet-label").textContent = "Flota de " + state.players[cpu].name;
-      log.textContent = state.battle.lastResult
-        ? state.battle.lastResult
-        : attacker.isCpu
-          ? "Esperando disparo de la CPU…"
-          : "Elige una casilla para atacar.";
-      renderCpuHumanView(!attacker.isCpu);
+    if (state.battle.lastResult) {
+      log.textContent = state.battle.lastResult + (isCpuTurn ? "" : " · Te toca.");
+      log.classList.add("cpu-msg");
     } else {
-      var defender = state.players[opponentOf(attackerIndex)];
-      $("#battle-subtitle").textContent =
-        "Haz clic en una casilla del tablero enemigo para disparar.";
-      $("#enemy-board-label").textContent = "Tablero de " + defender.name;
-      $("#own-board-label").textContent = "Tu flota (" + attacker.name + ")";
-      $("#own-fleet-label").textContent = "Tu flota";
-      $("#enemy-fleet-label").textContent = "Flota de " + defender.name;
-      log.textContent = state.battle.lastResult
-        ? state.battle.lastResult
-        : "Elige una casilla para atacar.";
-      renderPvpBoards(attackerIndex);
+      log.textContent = isCpuTurn ? "Esperando disparo de la CPU…" : "Elige una casilla para atacar.";
     }
+
+    renderBattleBoards(viewer, !isCpuTurn);
+  }
+
+  function shotAnimation(el, result) {
+    if (result === "miss") animateCell(el, "anim-splash", 550);
+    else if (result === "hit") animateCell(el, "anim-boom", 450);
   }
 
   function applyShotFeedback(attacker, result) {
@@ -1425,6 +1639,7 @@
     var coord = letters[c] + (r + 1);
     var log = $("#battle-log");
     log.className = "battle-log";
+    var cpuShot = state.players[attacker].isCpu;
 
     var msg = "";
     if (result.result === "miss") {
@@ -1436,58 +1651,58 @@
       log.classList.add("hit-msg");
       playSfx("hit");
     } else if (result.result === "sunk") {
-      msg = "¡Hundido! Destruiste a " + result.shipName + " (" + coord + ")";
-      log.classList.add("sunk-msg");
       playSfx("sunk");
-      showSunkBanner(result.shipName);
-      toast("¡Hundiste " + result.shipName + "!", 2800);
+      if (cpuShot) {
+        msg = "¡Hundido! Perdiste a " + result.shipName + " (" + coord + ")";
+        showSunkBanner("¡Hundieron tu " + result.shipName + "!");
+      } else {
+        msg = "¡Hundido! Destruiste a " + result.shipName + " (" + coord + ")";
+        showSunkBanner("¡Hundiste " + result.shipName + "!");
+      }
+      log.classList.add("sunk-msg");
     }
 
-    if (state.players[attacker].isCpu) {
+    if (cpuShot) {
       msg = state.players[attacker].name + ": " + msg;
       log.classList.add("cpu-msg");
     }
 
     log.textContent = msg;
     state.battle.lastResult = msg;
+    state.battle.lastShot = { by: attacker, r: r, c: c };
 
-    if (isCpuMode()) {
-      renderCpuHumanView(false);
-      // Animations: human shots on enemy board; CPU shots on own board
-      if (attacker === 0) {
-        if (result.result === "miss") animateCell(findEnemyCell(r, c), "anim-splash", 550);
-        else if (result.result === "hit") animateCell(findEnemyCell(r, c), "anim-boom", 450);
-        else if (result.result === "sunk") playTheaterMode(result.cells, true);
-      } else {
-        if (result.result === "miss") animateCell(findOwnCell(r, c), "anim-splash", 550);
-        else if (result.result === "hit") animateCell(findOwnCell(r, c), "anim-boom", 450);
-        else if (result.result === "sunk") playTheaterMode(result.cells, false);
-        updateCpuAfterShot(result, attacker);
-      }
+    var viewer = battleViewer(attacker);
+    renderBattleBoards(viewer, false);
+    // Disparo del jugador que mira: se anima el tablero enemigo; si no (CPU), el propio
+    var onEnemyBoard = attacker === viewer;
+    if (result.result === "sunk") {
+      playTheaterMode(result.cells, onEnemyBoard);
     } else {
-      renderPvpBoards(attacker);
-      if (result.result === "miss") animateCell(findEnemyCell(r, c), "anim-splash", 550);
-      else if (result.result === "hit") animateCell(findEnemyCell(r, c), "anim-boom", 450);
-      else if (result.result === "sunk") playTheaterMode(result.cells, true);
+      shotAnimation(onEnemyBoard ? findEnemyCell(r, c) : findOwnCell(r, c), result.result);
     }
 
-    saveGame();
+    if (cpuShot && state.difficulty !== "hard") updateCpuAfterShot(result, attacker);
   }
 
   function afterShot(attacker, result) {
     if (result.win) {
       state.winner = attacker;
       clearSave();
-      setTimeout(function () { showWin(); }, 1000);
+      later(showWin, 1000);
       return;
     }
 
+    var next = opponentOf(attacker);
+    // Guardar ya con el turno siguiente: si se recarga ahora, no se repite el disparo
+    state.battle.attacker = next;
+    state.battle.awaitingHandoff = true;
+
     if (isCpuMode()) {
-      var next = opponentOf(attacker);
-      state.battle.awaitingHandoff = false;
-      setTimeout(function () {
+      // Mantener visible el último disparo de la CPU cuando le toca al humano
+      if (state.players[next].isCpu) state.battle.lastResult = null;
+      saveGame();
+      later(function () {
         clearTheater();
-        state.battle.lastResult = null;
         showBattleFor(next);
         saveGame();
         if (state.players[next].isCpu) scheduleCpuTurn();
@@ -1495,19 +1710,18 @@
       return;
     }
 
-    state.battle.awaitingHandoff = true;
-    var nextP = opponentOf(attacker);
-    setTimeout(function () {
+    // En 2 jugadores, el siguiente verá dónde disparó el rival
+    state.battle.lastResult = playerLabel(attacker) + " disparó: " + state.battle.lastResult;
+    saveGame();
+    later(function () {
       clearTheater();
       showHandoff(
         "Pasa el dispositivo",
         "Turno terminado.<br><br>Entrega el dispositivo a <strong>" +
-          escapeHtml(playerLabel(nextP)) +
+          escapeHtml(playerLabel(next)) +
           "</strong>.<br>Cuando esté listo/a, pulsa <strong>Listo</strong>.",
         function () {
-          state.battle.awaitingHandoff = false;
-          state.battle.lastResult = null;
-          showBattleFor(nextP);
+          showBattleFor(next);
           saveGame();
         }
       );
@@ -1532,10 +1746,9 @@
   }
 
   function scheduleCpuTurn() {
-    clearTimeout(cpuTimer);
     state.battle.inputLocked = true;
     var delay = 650 + Math.random() * 450;
-    cpuTimer = setTimeout(function () {
+    later(function () {
       if (state.phase !== "battle") return;
       var attacker = state.battle.attacker;
       if (!state.players[attacker].isCpu) return;
@@ -1544,7 +1757,7 @@
       if (!target) return;
       var result = fireShot(attacker, target.r, target.c);
       if (!result.ok) {
-        target = chooseCpuShot(attacker);
+        target = pickRandom(unshotCells(attacker));
         if (!target) return;
         result = fireShot(attacker, target.r, target.c);
       }
@@ -1558,7 +1771,9 @@
   function showWin() {
     clearTheater();
     var w = state.players[state.winner];
-    $("#win-title").textContent = "¡Victoria!";
+    var humanLost = isCpuMode() && w.isCpu;
+    $("#win-title").textContent = humanLost ? "Derrota" : "¡Victoria!";
+    $(".win-trophy").textContent = humanLost ? "⚓" : "🏆";
     $("#win-msg").innerHTML =
       "<strong>" + escapeHtml(w.name) + "</strong> hundió toda la flota enemiga.";
 
@@ -1583,7 +1798,7 @@
 
     showScreen("win");
     playSfx("win");
-    spawnWinConfetti();
+    if (!humanLost) spawnWinConfetti();
   }
 
   // ——— Flujo ———
@@ -1621,7 +1836,7 @@
   }
 
   function beginGame(opts) {
-    clearTimeout(cpuTimer);
+    clearGameTimers();
     clearTheater();
     clearSave();
 
@@ -1632,8 +1847,7 @@
     state.spacing = !!opts.spacing;
     state.fleetTemplate = opts.boardMode === "rapida" ? FLEET_RAPIDA : FLEET_NORMAL;
     state.winner = null;
-    state.turnCount = 0;
-    resetCpuAi();
+    resetBattleState();
 
     state.players[0] = createPlayer(opts.name1, false);
     state.players[1] = createPlayer(opts.name2, opts.mode === "cpu");
@@ -1641,30 +1855,38 @@
     if (opts.mode === "cpu") {
       startPlacement(0);
     } else {
+      preparePlacement(0);
+      saveGame("place");
       showHandoff(
         "Pasa el dispositivo",
         "Es el turno de colocar la flota de <strong>" +
           escapeHtml(state.players[0].name) +
           "</strong>.<br>El otro jugador no debe mirar.<br><br>Pulsa <strong>Listo</strong> para continuar.",
-        function () { startPlacement(0); }
+        showPlacement
       );
     }
   }
 
   function onConfirmPlacement() {
-    if (!allShipsPlaced()) return;
+    // Evita doble clic: en modo CPU la batalla arranca con un pequeño retraso
+    if (confirmingPlacement || !allShipsPlaced()) return;
+    confirmingPlacement = true;
+    $("#btn-confirm-placement").disabled = true;
     var idx = state.placing.playerIndex;
     commitPlacement(idx);
-    saveGame();
 
     if (isCpuMode()) {
       placeFleetRandomForPlayer(1);
+      resetBattleState();
+      saveGame("battle");
       toast("La CPU colocó su flota");
-      setTimeout(function () { startBattle(); }, 400);
+      later(startBattle, 400);
       return;
     }
 
     if (idx === 0) {
+      preparePlacement(1);
+      saveGame("place");
       showHandoff(
         "Pasa el dispositivo",
         "Flota de <strong>" +
@@ -1672,21 +1894,25 @@
           "</strong> lista.<br><br>Entrega el dispositivo a <strong>" +
           escapeHtml(state.players[1].name) +
           "</strong> para que coloque sus barcos.<br>Pulsa <strong>Listo</strong> cuando esté preparado/a.",
-        function () { startPlacement(1); }
+        showPlacement
       );
     } else {
+      resetBattleState();
+      state.battle.awaitingHandoff = true;
+      saveGame("battle");
       showHandoff(
         "¡A la batalla!",
         "Ambas flotas están listas.<br><br>Empieza <strong>" +
           escapeHtml(state.players[0].name) +
           "</strong>.<br>Pasa el dispositivo y pulsa <strong>Listo</strong>.",
-        function () { startBattle(); }
+        startBattle
       );
     }
   }
 
+  // Vuelve al inicio. La partida en curso queda guardada para "Continuar partida".
   function resetToStart() {
-    clearTimeout(cpuTimer);
+    clearGameTimers();
     clearTheater();
     showScreen("start");
     state.phase = "start";
@@ -1753,10 +1979,17 @@
     if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
       var el = doc.documentElement;
       var req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (req) req.call(el);
+      if (req) handleMaybePromise(req.call(el));
+      else toast("Pantalla completa no disponible en este navegador");
     } else {
       var exit = doc.exitFullscreen || doc.webkitExitFullscreen;
-      if (exit) exit.call(doc);
+      if (exit) handleMaybePromise(exit.call(doc));
+    }
+  }
+
+  function handleMaybePromise(p) {
+    if (p && typeof p.catch === "function") {
+      p.catch(function () { toast("No se pudo cambiar a pantalla completa"); });
     }
   }
 
@@ -1866,12 +2099,31 @@
     });
 
     $("#btn-random").addEventListener("click", function () {
-      if (state.phase !== "place") return;
+      if (state.phase !== "place" || confirmingPlacement) return;
       playSfx("place");
-      randomPlaceAll();
+      if (randomPlaceAll()) toast("Flota colocada al azar");
+      placePreview = { cells: null, valid: false };
       renderPlacement();
       saveGame();
-      toast("Flota colocada al azar");
+    });
+
+    $("#btn-clear-placement").addEventListener("click", function () {
+      if (state.phase !== "place" || confirmingPlacement) return;
+      playSfx("click");
+      state.placing.ships.forEach(function (s) { removeShipFromPlacing(s.id); });
+      state.placing.selectedShipId = state.placing.ships[0].id;
+      placePreview = { cells: null, valid: false };
+      renderPlacement();
+      saveGame();
+      toast("Tablero vacío");
+    });
+
+    $("#btn-menu").addEventListener("click", function () {
+      playSfx("click");
+      if (state.phase === "start") return;
+      var inGame = state.phase === "place" || state.phase === "battle" || state.phase === "handoff";
+      if (inGame && !window.confirm("¿Volver al inicio? La partida queda guardada y podrás continuarla.")) return;
+      resetToStart();
     });
 
     $("#btn-confirm-placement").addEventListener("click", function () {
@@ -1908,6 +2160,16 @@
       }
       if (e.key === "Escape") clearTheater();
     });
+
+    // Los navegadores sólo permiten audio tras una interacción: si la música estaba
+    // activada en una visita anterior, arrancarla con el primer toque/clic.
+    document.addEventListener(
+      "pointerdown",
+      function () {
+        if (prefs.music && !musicPlaying) startMusic();
+      },
+      { once: true }
+    );
   }
 
   function init() {
