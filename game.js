@@ -146,7 +146,14 @@
       var e = rec.cpu[d];
       if (e.w || e.l) parts.push(DIFF_LABELS[d] + " " + e.w + "–" + e.l);
     });
-    return parts.length ? "Tu récord vs CPU (victorias–derrotas): " + parts.join(" · ") : "";
+    var lines = [];
+    if (parts.length) lines.push("Tu récord vs CPU (victorias–derrotas): " + parts.join(" · "));
+    if (rec.pvp) lines.push(plural(rec.pvp, "partida", "partidas") + " a 2 jugadores");
+    return lines.join(" · ");
+  }
+
+  function plural(n, one, many) {
+    return n + " " + (n === 1 ? one : many);
   }
 
   function renderRecordLine() {
@@ -207,6 +214,12 @@
   let confirmingPlacement = false;
   let handoffShownAt = 0;
   const HANDOFF_GUARD_MS = 700;
+  // Tras cambiar de pantalla, los tableros ignoran clics un instante: así el
+  // segundo toque de un doble toque en "Listo"/"Continuar" no dispara solo.
+  let boardInputReadyAt = 0;
+  const BOARD_GUARD_MS = 400;
+  // Último barco colocado, para que un doble clic no lo recoja de inmediato
+  let lastPlaced = { id: null, at: 0 };
 
   // Temporizadores ligados a la partida en curso: se cancelan al salir o empezar otra,
   // para que un disparo/turno pendiente no se ejecute sobre una partida distinta.
@@ -242,12 +255,14 @@
 
   function showScreen(name) {
     var changed = !screens[name].classList.contains("active");
+    if (changed) boardInputReadyAt = Date.now() + BOARD_GUARD_MS;
     Object.values(screens).forEach(function (el) { el.classList.remove("active"); });
     screens[name].classList.add("active");
     state.phase = name === "placement" ? "place" : name;
     showHud(true);
     var menuBtn = $("#btn-menu");
     if (menuBtn) menuBtn.hidden = name === "start";
+    syncHudSpace();
     if (changed) {
       try { window.scrollTo(0, 0); } catch (e) {}
     }
@@ -524,6 +539,7 @@
     btn.setAttribute("aria-pressed", prefs.music ? "true" : "false");
     var label = btn.querySelector(".hud-label");
     if (label) label.textContent = prefs.music ? "Música on" : "Música";
+    syncHudSpace();
   }
 
   // ——— Animaciones ———
@@ -1141,7 +1157,17 @@
     state.battle.attacker = data.battle && data.battle.attacker === 1 ? 1 : 0;
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
     state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
-    state.battle.turnCounted = !!(data.battle && data.battle.turnCounted);
+    if (data.battle && typeof data.battle.turnCounted === "boolean") {
+      state.battle.turnCounted = data.battle.turnCounted;
+    } else if (state.battle.lastResult) {
+      // Guardado de una versión anterior hecho justo después de un disparo:
+      // el turno ya se jugó, así que le toca al rival.
+      state.battle.attacker = opponentOf(state.battle.attacker);
+      state.battle.turnCounted = false;
+    } else {
+      // Guardado anterior hecho al empezar el turno: ese turno ya estaba contado
+      state.battle.turnCounted = data.phase === "battle" && (data.turnCount || 0) > 0;
+    }
 
     if (data.phase === "place") {
       state.placing = data.placing;
@@ -1239,7 +1265,7 @@
     container.addEventListener("click", function (e) {
       var el = cellFromEvent(container, e);
       var o = container._opts;
-      if (!el || !o || !o.interactive) return;
+      if (!el || !o || !o.interactive || Date.now() < boardInputReadyAt) return;
       if (o.onCellClick) o.onCellClick(Number(el.dataset.r), Number(el.dataset.c));
     });
 
@@ -1258,10 +1284,21 @@
     });
 
     container.addEventListener("focusin", function (e) {
-      if (container._restoringFocus) return;
       var el = cellFromEvent(container, e);
+      if (el && el.tabIndex !== 0 && el.hasAttribute("tabindex")) {
+        // Mantener una sola parada de Tab: la casilla con foco pasa a ser la entrada
+        container.querySelectorAll('.cell[tabindex="0"]').forEach(function (c) { c.tabIndex = -1; });
+        el.tabIndex = 0;
+      }
+      if (container._restoringFocus) return;
       var o = container._opts;
       if (el && o && o.onCellHover) o.onCellHover(Number(el.dataset.r), Number(el.dataset.c));
+    });
+
+    container.addEventListener("focusout", function (e) {
+      if (e.relatedTarget && container.contains(e.relatedTarget)) return;
+      var o = container._opts;
+      if (o && o.onCellLeave) o.onCellLeave();
     });
 
     container.addEventListener("keydown", function (e) {
@@ -1272,6 +1309,8 @@
       var c = Number(el.dataset.c);
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
+        // Una tecla mantenida no debe repetir la acción (colocar/recoger, disparar)
+        if (e.repeat || Date.now() < boardInputReadyAt) return;
         if (o.interactive && o.onCellClick) o.onCellClick(r, c);
         return;
       }
@@ -1280,12 +1319,7 @@
       if (!mv) return;
       e.preventDefault();
       var target = container.querySelector(cellSelector(r + mv[0], c + mv[1]));
-      if (target) {
-        // Tabindex "itinerante": sólo una casilla del tablero está en el orden de Tab
-        el.tabIndex = -1;
-        target.tabIndex = 0;
-        target.focus();
-      }
+      if (target) target.focus(); // focusin actualiza el tabindex itinerante
     });
   }
 
@@ -1575,6 +1609,8 @@
     if (confirmingPlacement) return;
     var occupant = state.placing.occupied[key(r, c)];
     if (occupant) {
+      // Un segundo clic inmediato (doble clic) no recoge el barco recién colocado
+      if (occupant === lastPlaced.id && Date.now() - lastPlaced.at < 500) return;
       // Clic sobre un barco colocado: recogerlo para moverlo
       pickUpShip(occupant);
       return;
@@ -1593,6 +1629,7 @@
       );
       return;
     }
+    lastPlaced = { id: id, at: Date.now() };
     playSfx("place");
     var next = state.placing.ships.find(function (s) { return !s.cells.length; });
     state.placing.selectedShipId = next ? next.id : null;
@@ -1628,7 +1665,7 @@
   // ——— Batalla ———
   function shipDots(length) {
     return (
-      '<span class="len-dots" aria-label="' + length + ' casillas">' +
+      '<span class="len-dots" role="img" aria-label="En juego, ' + length + ' casillas">' +
       new Array(length + 1).join('<span class="len-dot"></span>') +
       "</span>"
     );
@@ -1938,7 +1975,8 @@
       var rec = loadRecord();
       var e = isCpuMode() && rec.cpu[state.difficulty];
       recEl.textContent = e
-        ? "Récord en " + DIFF_LABELS[state.difficulty] + ": " + e.w + " victorias · " + e.l + " derrotas"
+        ? "Récord en " + DIFF_LABELS[state.difficulty] + ": " +
+          plural(e.w, "victoria", "victorias") + " · " + plural(e.l, "derrota", "derrotas")
         : "";
       recEl.hidden = !e;
     }
@@ -2078,6 +2116,7 @@
     document.body.classList.toggle("large-text", !!on);
     var btn = $("#btn-large-text");
     if (btn) btn.setAttribute("aria-pressed", on ? "true" : "false");
+    syncHudSpace();
   }
 
   function applyStartFormFromPrefs() {
@@ -2327,6 +2366,23 @@
     );
   }
 
+  // Reserva arriba exactamente el alto del HUD (cambia con el texto grande,
+  // la etiqueta de música o al envolverse en pantallas estrechas)
+  function syncHudSpace() {
+    var hud = $("#hud-controls");
+    if (!hud || hud.hidden) return;
+    var bottom = hud.getBoundingClientRect().bottom;
+    document.documentElement.style.setProperty("--hud-space", Math.ceil(bottom + 12) + "px");
+  }
+
+  function watchHud() {
+    var hud = $("#hud-controls");
+    if (!hud) return;
+    if (window.ResizeObserver) new ResizeObserver(syncHudSpace).observe(hud);
+    window.addEventListener("resize", syncHudSpace);
+    syncHudSpace();
+  }
+
   function init() {
     loadPrefs();
     applyTheme(prefs.theme);
@@ -2340,6 +2396,7 @@
     renderRecordLine();
     showScreen("start");
     showHud(true);
+    watchHud();
   }
 
   if (document.readyState === "loading") {

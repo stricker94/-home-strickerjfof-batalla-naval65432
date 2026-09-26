@@ -224,8 +224,8 @@ body {
   z-index: 1;
   max-width: 1120px;
   margin: 0 auto;
-  /* Espacio superior para que los controles fijos (HUD) no tapen la cabecera */
-  padding: 4rem clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
+  /* Espacio superior para los controles fijos (HUD); game.js mide su altura real */
+  padding: var(--hud-space, 4rem) clamp(0.75rem, 3vw, 1.85rem) 2.75rem;
   min-height: 100dvh;
 }
 
@@ -778,10 +778,6 @@ body.large-text #app {
 @media (max-width: 900px) {
   .placement-layout {
     grid-template-columns: 1fr;
-  }
-  .topbar,
-  .panel-bar {
-    padding-right: 1.15rem;
   }
 }
 
@@ -1591,10 +1587,6 @@ body.large-text .board .label {
 }
 
 @media (max-width: 960px) {
-  #app {
-    padding-top: 4rem;
-  }
-
   .start-card {
     margin-top: 2vh;
   }
@@ -1633,13 +1625,6 @@ body.large-text .board .label {
   .btn:hover:not(:disabled),
   .btn-hud:hover {
     transform: none;
-  }
-}
-
-/* En pantallas estrechas el HUD ocupa dos filas */
-@media (max-width: 600px) {
-  #app {
-    padding-top: 6.2rem;
   }
 }
 
@@ -1707,7 +1692,7 @@ body.large-text .board .label {
 }
 
 /* Mira: fila y columna de la casilla apuntada */
-.cell.crosshair:not(.hit):not(.miss) {
+.cell.crosshair:not(.hit):not(.miss):not(:hover):not(:focus-visible) {
   background: color-mix(in srgb, var(--accent) 24%, rgba(14, 116, 144, 0.35));
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
@@ -1725,4 +1710,12 @@ body.large-text .board .label {
   border-radius: 2px;
   background: currentColor;
   opacity: 0.75;
+}
+
+/* Insignia de turno atenuada mientras juega la CPU */
+.turn-badge.is-cpu {
+  color: var(--mist);
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.12);
+  box-shadow: none;
 }
