@@ -1048,7 +1048,7 @@
       };
     });
     state.cpu = data.cpu || { huntQueue: [], huntHits: [], huntDir: null };
-    state.winner = data.winner;
+    state.winner = null;
     state.turnCount = data.turnCount || 0;
     state.battle.awaitingHandoff = false;
     state.battle.inputLocked = false;
@@ -1195,7 +1195,12 @@
       if (!mv) return;
       e.preventDefault();
       var target = container.querySelector(cellSelector(r + mv[0], c + mv[1]));
-      if (target) target.focus();
+      if (target) {
+        // Tabindex "itinerante": sólo una casilla del tablero está en el orden de Tab
+        el.tabIndex = -1;
+        target.tabIndex = 0;
+        target.focus();
+      }
     });
   }
 
@@ -1290,12 +1295,8 @@
         }
 
         if (interactive) {
-          if (!shot) {
-            cell.classList.add("interactive");
-            cell.tabIndex = 0;
-          } else {
-            cell.tabIndex = -1;
-          }
+          if (!shot) cell.classList.add("interactive");
+          cell.tabIndex = -1;
         }
 
         cell.setAttribute("aria-label", labelParts.join(", "));
@@ -1304,9 +1305,12 @@
     }
     container.appendChild(frag);
 
-    if (focusR !== null) {
-      var again = container.querySelector(cellSelector(focusR, focusC));
-      if (again && again.tabIndex >= -1) again.focus({ preventScroll: true });
+    if (interactive) {
+      // Una sola parada de Tab por tablero; las flechas mueven dentro de él
+      var again = focusR !== null ? container.querySelector(cellSelector(focusR, focusC)) : null;
+      var entry = again || container.querySelector(".cell.interactive") || container.querySelector(".cell");
+      if (entry) entry.tabIndex = 0;
+      if (again) again.focus({ preventScroll: true });
     }
   }
 
@@ -2124,6 +2128,11 @@
     $("#btn-menu").addEventListener("click", function () {
       playSfx("click");
       if (state.phase === "start") return;
+      if (state.winner != null && state.phase === "battle") {
+        clearGameTimers();
+        showWin();
+        return;
+      }
       var inGame = state.phase === "place" || state.phase === "battle" || state.phase === "handoff";
       if (inGame && !window.confirm("¿Volver al inicio? La partida queda guardada y podrás continuarla.")) return;
       resetToStart();
