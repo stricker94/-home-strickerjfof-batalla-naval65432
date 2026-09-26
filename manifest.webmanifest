@@ -1,0 +1,17 @@
+{
+  "name": "Batalla Naval — Empresas",
+  "short_name": "Batalla Naval",
+  "description": "Batalla Naval con flotas corporativas: 2 jugadores en el mismo dispositivo o contra la CPU.",
+  "lang": "es-MX",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#04101c",
+  "theme_color": "#04101c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

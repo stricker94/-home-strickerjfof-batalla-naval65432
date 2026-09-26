@@ -1719,3 +1719,167 @@ body.large-text .board .label {
   background: rgba(148, 163, 184, 0.12);
   box-shadow: none;
 }
+
+/* Casillas descartadas: junto a un barco hundido con "barcos separados" */
+.cell.ruled-out {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.cell.ruled-out::after {
+  content: "·";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cell) * 0.5);
+  color: rgba(148, 163, 184, 0.55);
+  line-height: 1;
+}
+
+/* Historial de disparos */
+.shot-history {
+  margin: -0.5rem 0 1.35rem;
+  padding: 0.7rem 1rem;
+}
+
+.shot-history summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--mist);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.shot-history summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.history-count {
+  font-family: var(--mono);
+  color: var(--accent);
+  text-transform: none;
+}
+
+.shot-history-list {
+  margin: 0.6rem 0 0;
+  padding: 0 0 0 2.2rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  font-size: 0.88rem;
+}
+
+.shot-history-list li {
+  padding: 0.22rem 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  color: var(--mist);
+}
+
+.shot-history-list li::marker {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.shot-history-list li > span {
+  margin-right: 0.6rem;
+}
+
+.shot-history-list .h-who {
+  color: var(--foam);
+  font-weight: 600;
+}
+
+.shot-history-list .h-coord {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.shot-history-list .h-hit .h-res {
+  color: #fda4af;
+  font-weight: 600;
+}
+
+.shot-history-list .h-sunk .h-res {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+/* Tableros finales en la pantalla de victoria */
+.win-boards-wrap {
+  margin: -0.4rem 0 1.2rem;
+  text-align: left;
+  position: relative;
+  z-index: 1;
+}
+
+.win-boards-wrap summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0.4rem 0;
+}
+
+.win-boards-wrap summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.win-boards-wrap .hint {
+  margin: 0.2rem 0 0.7rem;
+}
+
+.win-boards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.9rem;
+}
+
+.win-board-fig {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.win-board-fig figcaption {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--mist);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.board.board-mini {
+  --gap: 2px;
+  --cell: min(18px, calc((100vw - 5.5rem) / var(--board-n) - 2px));
+  grid-template-columns: 16px repeat(var(--board-n), var(--cell));
+  grid-template-rows: 16px repeat(var(--board-n), var(--cell));
+  padding: 0.25rem;
+}
+
+.board.board-mini .label {
+  font-size: 0.55rem;
+}
+
+.board.board-mini .cell {
+  border-radius: 3px;
+}
+
+/* En teléfonos la barra de controles se queda arriba de la página en lugar de
+   flotar: así no tapa el tablero ni el historial al desplazarse */
+@media (max-width: 600px) {
+  .hud-controls {
+    position: absolute;
+    border-radius: 18px;
+  }
+}

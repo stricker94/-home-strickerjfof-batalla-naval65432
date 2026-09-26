@@ -53,6 +53,7 @@
     difficulty: "easy",
     boardMode: "normal",
     spacing: false,
+    extraShot: false,
     theme: "cyan",
     mute: false,
     music: false,
@@ -186,6 +187,7 @@
     boardSize: 10,
     boardMode: "normal",
     spacing: false,
+    extraShot: false,
     fleetTemplate: FLEET_NORMAL,
     players: [createPlayer("Jugador 1"), createPlayer("Jugador 2")],
     placing: {
@@ -203,6 +205,7 @@
       lastShot: null,
       turnCounted: false,
       inputLocked: false,
+      history: [],
     },
     cpu: { huntQueue: [], huntHits: [] },
     winner: null,
@@ -903,6 +906,24 @@
       .map(parseKey);
   }
 
+  // Con barcos separados, las casillas que rodean a un barco hundido no pueden
+  // tener barco: se marcan como descartadas (sin contar como disparo).
+  function ruledOutCells(shots) {
+    var out = {};
+    if (!state.spacing) return out;
+    Object.keys(shots).forEach(function (k) {
+      if (shots[k] !== "sunk") return;
+      var p = parseKey(k);
+      for (var dr = -1; dr <= 1; dr++) {
+        for (var dc = -1; dc <= 1; dc++) {
+          var ok = key(p.r + dr, p.c + dc);
+          if (inBounds(p.r + dr, p.c + dc) && !shots[ok]) out[ok] = true;
+        }
+      }
+    });
+    return out;
+  }
+
   function enqueueHuntAround(r, c, attackerIndex) {
     var shots = state.players[attackerIndex].shots;
     neighbors4(r, c).forEach(function (p) {
@@ -1043,12 +1064,16 @@
       return pickRandom(open);
     }
 
+    // Medio: no gasta disparos en casillas descartadas junto a un hundido
+    var ruled = ruledOutCells(shots);
     while (state.cpu.huntQueue.length) {
       var h = state.cpu.huntQueue.shift();
-      if (inBounds(h.r, h.c) && !shots[key(h.r, h.c)]) return h;
+      if (inBounds(h.r, h.c) && !shots[key(h.r, h.c)] && !ruled[key(h.r, h.c)]) return h;
     }
 
-    // Medio: en modo búsqueda dispara en patrón de tablero de ajedrez
+    var useful = open.filter(function (p) { return !ruled[key(p.r, p.c)]; });
+    if (useful.length) open = useful;
+    // En modo búsqueda dispara en patrón de tablero de ajedrez
     var parity = open.filter(function (p) { return (p.r + p.c) % 2 === 0; });
     return pickRandom(parity.length ? parity : open);
   }
@@ -1062,6 +1087,7 @@
       boardSize: state.boardSize,
       boardMode: state.boardMode,
       spacing: state.spacing,
+      extraShot: state.extraShot,
       phase: phase,
       players: state.players.map(function (p) {
         return {
@@ -1079,6 +1105,7 @@
         lastResult: state.battle.lastResult,
         lastShot: state.battle.lastShot,
         turnCounted: state.battle.turnCounted,
+        history: state.battle.history,
       },
       cpu: state.cpu,
       winner: state.winner,
@@ -1127,6 +1154,18 @@
 
   function hasValidSave() { return !!loadSave(); }
 
+  var HISTORY_RESULTS = ["miss", "hit", "sunk"];
+
+  function sanitizeHistory(list) {
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (h) {
+      return h && (h.by === 0 || h.by === 1) &&
+        typeof h.coord === "string" && HISTORY_RESULTS.indexOf(h.result) !== -1;
+    }).map(function (h) {
+      return { by: h.by, coord: h.coord.slice(0, 4), result: h.result, ship: typeof h.ship === "string" ? h.ship : "" };
+    });
+  }
+
   function applySave(data) {
     clearGameTimers();
     clearTheater();
@@ -1135,6 +1174,7 @@
     state.boardSize = data.boardSize || 10;
     state.boardMode = data.boardMode || "normal";
     state.spacing = !!data.spacing;
+    state.extraShot = !!data.extraShot;
     state.fleetTemplate = state.boardMode === "rapida" ? FLEET_RAPIDA : FLEET_NORMAL;
     state.players = data.players.map(function (p) {
       return {
@@ -1157,6 +1197,7 @@
     state.battle.attacker = data.battle && data.battle.attacker === 1 ? 1 : 0;
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
     state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
+    state.battle.history = sanitizeHistory(data.battle && data.battle.history);
     if (data.battle && typeof data.battle.turnCounted === "boolean") {
       state.battle.turnCounted = data.battle.turnCounted;
     } else if (state.battle.lastResult) {
@@ -1338,6 +1379,7 @@
     var previewCells = options.previewCells;
     var previewValid = options.previewValid;
     var lastShot = options.lastShot;
+    var ruledOut = options.ruledOut || {};
     var n = boardSize();
     var letters = cols();
 
@@ -1409,11 +1451,15 @@
           if (shot === "hit") cell.classList.add("hit");
           if (shot === "sunk") cell.classList.add("hit", "sunk");
           if (shot) labelParts.push(cellStateLabel(shot));
+          if (mode === "enemy" && !shot && ruledOut[k]) {
+            cell.classList.add("ruled-out");
+            labelParts.push("descartada");
+          }
           if (lastShot && lastShot.r === r && lastShot.c === c) cell.classList.add("last-shot");
         }
 
         if (interactive) {
-          if (!shot) cell.classList.add("interactive");
+          if (!shot && !ruledOut[k]) cell.classList.add("interactive");
           cell.tabIndex = -1;
         }
 
@@ -1713,6 +1759,7 @@
     buildBoard($("#enemy-board"), {
       mode: "enemy",
       shots: state.players[viewer].shots,
+      ruledOut: ruledOutCells(state.players[viewer].shots),
       interactive: !!canShoot,
       onCellClick: onFireClick,
       onCellHover: canShoot ? paintCrosshair : null,
@@ -1735,6 +1782,7 @@
     state.battle.lastResult = null;
     state.battle.lastShot = null;
     state.battle.turnCounted = false;
+    state.battle.history = [];
     state.turnCount = 0;
     resetCpuAi();
   }
@@ -1761,13 +1809,18 @@
     var viewer = battleViewer(attackerIndex);
     var enemy = state.players[opponentOf(viewer)];
     var isCpuTurn = attacker.isCpu;
+    // Disparo extra: el último disparo fue de este mismo jugador y acertó
+    var last = state.battle.lastShot;
+    var bonus = !!(state.extraShot && last && last.by === attackerIndex && state.battle.lastResult);
 
     $("#battle-title").textContent = isCpuMode() && !isCpuTurn ? "Tu turno" : "Turno de " + attacker.name;
     $("#turn-badge").textContent = attacker.name;
     $("#turn-badge").classList.toggle("is-cpu", isCpuTurn);
     $("#battle-subtitle").textContent = isCpuTurn
-      ? "La CPU está apuntando…"
-      : "Haz clic (o usa flechas + Enter) en el tablero enemigo para disparar.";
+      ? (bonus ? "La CPU acertó y vuelve a disparar…" : "La CPU está apuntando…")
+      : bonus
+        ? "¡Acertaste! Tienes un disparo extra."
+        : "Haz clic (o usa flechas + Enter) en el tablero enemigo para disparar.";
     $("#enemy-board-label").textContent = "Tablero de " + enemy.name;
     $("#own-board-label").textContent = "Tu flota (" + state.players[viewer].name + ")";
     $("#own-fleet-label").textContent = "Tu flota";
@@ -1776,13 +1829,40 @@
     var log = $("#battle-log");
     log.className = "battle-log";
     if (state.battle.lastResult) {
-      log.textContent = state.battle.lastResult + (isCpuTurn ? "" : " · Te toca.");
-      log.classList.add("cpu-msg");
+      log.textContent = state.battle.lastResult + (isCpuTurn ? "" : bonus ? " · ¡Dispara otra vez!" : " · Te toca.");
+      log.classList.add(bonus && !isCpuTurn ? "hit-msg" : "cpu-msg");
     } else {
       log.textContent = isCpuTurn ? "Esperando disparo de la CPU…" : "Elige una casilla para atacar.";
     }
 
     renderBattleBoards(viewer, !isCpuTurn);
+    renderHistory();
+  }
+
+  var HISTORY_TEXT = { miss: "Agua", hit: "Tocado", sunk: "Hundido" };
+
+  function renderHistory() {
+    var wrap = $("#shot-history");
+    if (!wrap) return;
+    var list = state.battle.history;
+    wrap.hidden = !list.length;
+    $("#shot-history-count").textContent = list.length ? "(" + list.length + ")" : "";
+    $("#shot-history-list").innerHTML = list
+      .slice()
+      .reverse()
+      .map(function (h) {
+        return (
+          '<li class="h-' + h.result + '"><span class="h-who">' +
+          escapeHtml(playerLabel(h.by)) +
+          '</span><span class="h-coord">' +
+          escapeHtml(h.coord) +
+          '</span><span class="h-res">' +
+          HISTORY_TEXT[h.result] +
+          (h.result === "sunk" && h.ship ? " " + escapeHtml(h.ship) : "") +
+          "</span></li>"
+        );
+      })
+      .join("");
   }
 
   // Resalta fila y columna de la casilla apuntada en el tablero enemigo
@@ -1842,6 +1922,14 @@
     log.textContent = msg;
     state.battle.lastResult = msg;
     state.battle.lastShot = { by: attacker, r: r, c: c };
+    // El nombre del barco sólo se anota al hundirlo (al tocarlo no se revela)
+    state.battle.history.push({
+      by: attacker,
+      coord: coord,
+      result: result.result,
+      ship: result.result === "sunk" ? result.shipName : "",
+    });
+    renderHistory();
 
     var viewer = battleViewer(attacker);
     renderBattleBoards(viewer, false);
@@ -1862,6 +1950,17 @@
       recordResult();
       clearSave();
       later(showWin, 1000);
+      return;
+    }
+
+    if (state.extraShot && result.result !== "miss") {
+      // Disparo extra: sigue el mismo jugador dentro del mismo turno (ya contado)
+      saveGame();
+      later(function () {
+        clearTheater();
+        showBattleFor(attacker);
+        if (state.players[attacker].isCpu) scheduleCpuTurn();
+      }, result.result === "sunk" ? 1200 : 650);
       return;
     }
 
@@ -1908,6 +2007,10 @@
     if (state.players[attacker].isCpu) return;
 
     clearTheater();
+    if (ruledOutCells(state.players[attacker].shots)[key(r, c)]) {
+      toast("Ahí no puede haber barco: los barcos van separados");
+      return;
+    }
     var result = fireShot(attacker, r, c);
     if (!result.ok) {
       if (result.reason === "already") toast("Ya disparaste ahí");
@@ -1969,6 +2072,7 @@
 
     var statsEl = $("#win-stats");
     statsEl.innerHTML = block(state.players[0]) + block(state.players[1]);
+    renderWinBoards();
 
     var recEl = $("#win-record");
     if (recEl) {
@@ -1986,6 +2090,27 @@
     if (!humanLost) spawnWinConfetti();
   }
 
+  // Tableros finales: cada flota con los disparos que recibió (revela lo no descubierto)
+  function renderWinBoards() {
+    var wrap = $("#win-boards-wrap");
+    if (!wrap) return;
+    wrap.open = false;
+    var last = state.battle.lastShot;
+    [0, 1].forEach(function (i) {
+      var opp = opponentOf(i);
+      var el = $("#win-board-" + i);
+      $("#win-board-" + i + "-label").textContent = "Flota de " + playerLabel(i);
+      el.setAttribute("aria-label", "Tablero final de " + playerLabel(i));
+      buildBoard(el, {
+        mode: "own",
+        occupied: occupiedMap(state.players[i].ships),
+        shots: state.players[opp].shots,
+        interactive: false,
+        lastShot: last && last.by === opp ? last : null,
+      });
+    });
+  }
+
   // ——— Flujo ———
   function readStartOptions() {
     var mode =
@@ -1997,6 +2122,7 @@
     var theme =
       (document.querySelector('input[name="theme"]:checked') || {}).value || "cyan";
     var spacing = $("#opt-spacing").checked;
+    var extraShot = $("#opt-extra-shot").checked;
     var n1 = $("#name-p1").value.trim();
     var n2 = $("#name-p2").value.trim();
 
@@ -2005,6 +2131,7 @@
     prefs.boardMode = board;
     prefs.theme = theme;
     prefs.spacing = spacing;
+    prefs.extraShot = extraShot;
     prefs.name1 = n1;
     prefs.name2 = n2;
     savePrefs();
@@ -2015,6 +2142,7 @@
       difficulty: diff,
       boardMode: board,
       spacing: spacing,
+      extraShot: extraShot,
       name1: n1 || "Jugador 1",
       name2: mode === "cpu" ? n2 || "CPU" : n2 || "Jugador 2",
     };
@@ -2030,6 +2158,7 @@
     state.boardMode = opts.boardMode;
     state.boardSize = opts.boardMode === "rapida" ? 8 : 10;
     state.spacing = !!opts.spacing;
+    state.extraShot = !!opts.extraShot;
     state.fleetTemplate = opts.boardMode === "rapida" ? FLEET_RAPIDA : FLEET_NORMAL;
     state.winner = null;
     resetBattleState();
@@ -2137,6 +2266,7 @@
     );
     if (themeInput) themeInput.checked = true;
     $("#opt-spacing").checked = !!prefs.spacing;
+    $("#opt-extra-shot").checked = !!prefs.extraShot;
     $("#name-p1").value = prefs.name1 || "";
     $("#name-p2").value = prefs.name2 || "";
     applyTheme(prefs.theme);
@@ -2223,6 +2353,11 @@
 
     $("#opt-spacing").addEventListener("change", function () {
       prefs.spacing = $("#opt-spacing").checked;
+      savePrefs();
+    });
+
+    $("#opt-extra-shot").addEventListener("change", function () {
+      prefs.extraShot = $("#opt-extra-shot").checked;
       savePrefs();
     });
 
@@ -2332,6 +2467,7 @@
         difficulty: state.difficulty,
         boardMode: state.boardMode,
         spacing: state.spacing,
+        extraShot: state.extraShot,
         name1: state.players[0].name,
         name2: state.players[1].name,
       });
@@ -2372,6 +2508,8 @@
     var hud = $("#hud-controls");
     if (!hud || hud.hidden) return;
     var bottom = hud.getBoundingClientRect().bottom;
+    // En teléfonos la barra no es fija (se desplaza con la página): medir desde el inicio
+    if (getComputedStyle(hud).position === "absolute") bottom += window.scrollY || 0;
     document.documentElement.style.setProperty("--hud-space", Math.ceil(bottom + 12) + "px");
   }
 
@@ -2381,6 +2519,16 @@
     if (window.ResizeObserver) new ResizeObserver(syncHudSpace).observe(hud);
     window.addEventListener("resize", syncHudSpace);
     syncHudSpace();
+  }
+
+  // Instalable y jugable sin conexión (sólo funciona servido por http/https)
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
+    var register = function () {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
+    };
+    if (document.readyState === "complete") register();
+    else window.addEventListener("load", register);
   }
 
   function init() {
@@ -2397,6 +2545,7 @@
     showScreen("start");
     showHud(true);
     watchHud();
+    registerServiceWorker();
   }
 
   if (document.readyState === "loading") {
