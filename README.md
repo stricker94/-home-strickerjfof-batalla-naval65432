@@ -13,7 +13,9 @@ Abre `index.html` en el navegador (doble clic o sirviendo la carpeta con cualqui
 - **Colocación:** elige un barco, gira con `R` y haz clic en el tablero. Haz clic en un barco ya colocado (en el tablero o en la lista) para moverlo. También hay botones *Aleatorio* y *Limpiar*.
 - **Teclado:** flechas para moverte por el tablero, `Enter`/`Espacio` para colocar o disparar, `R` para girar.
 - **Guardado automático:** la partida se guarda en el navegador. Con el botón *Inicio* puedes salir y luego pulsar *Continuar partida*.
-- **Extras:** música y efectos generados con Web Audio, texto grande, pantalla completa y tres colores de acento.
+- **Récord:** se guardan tus victorias y derrotas contra la CPU por dificultad y se muestran al inicio y al terminar.
+- **Ayudas visuales:** mira de fila y columna al apuntar, último disparo resaltado y tamaño de los barcos enemigos que siguen a flote.
+- **Extras:** música y efectos generados con Web Audio, vibración en móviles, texto grande, pantalla completa y tres colores de acento.
 
 ## Estructura
 

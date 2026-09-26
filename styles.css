@@ -1691,3 +1691,38 @@ body.large-text .board .label {
 .board-row {
   display: contents;
 }
+
+/* Récord de partidas */
+.record-line {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+
+.win-card .record-line {
+  margin: 0.2rem 0 1rem;
+  text-align: center;
+}
+
+/* Mira: fila y columna de la casilla apuntada */
+.cell.crosshair:not(.hit):not(.miss) {
+  background: color-mix(in srgb, var(--accent) 24%, rgba(14, 116, 144, 0.35));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Tamaño de los barcos enemigos que siguen a flote */
+.len-dots {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: middle;
+}
+
+.len-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.75;
+}

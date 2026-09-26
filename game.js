@@ -10,6 +10,8 @@
   const SAVE_KEY = "batalla-naval-save-v2";
   const MUTE_KEY = "batalla-naval-muted";
   const MUSIC_KEY = "batalla-naval-music";
+  const RECORD_KEY = "batalla-naval-record-v1";
+  const DIFF_LABELS = { easy: "Fácil", medium: "Medio", hard: "Difícil" };
 
   const COLS_ALL = "ABCDEFGHIJ".split("");
 
@@ -95,6 +97,64 @@
       localStorage.setItem(MUTE_KEY, prefs.mute ? "1" : "0");
       localStorage.setItem(MUSIC_KEY, prefs.music ? "1" : "0");
     } catch (e) {}
+  }
+
+  // ——— Récord (victorias/derrotas contra la CPU y partidas a 2) ———
+  function emptyRecord() {
+    return {
+      cpu: { easy: { w: 0, l: 0 }, medium: { w: 0, l: 0 }, hard: { w: 0, l: 0 } },
+      pvp: 0,
+    };
+  }
+
+  function loadRecord() {
+    var rec = emptyRecord();
+    try {
+      var raw = JSON.parse(localStorage.getItem(RECORD_KEY) || "null");
+      if (raw && raw.cpu) {
+        Object.keys(rec.cpu).forEach(function (d) {
+          var src = raw.cpu[d] || {};
+          rec.cpu[d].w = Math.max(0, Number(src.w) || 0);
+          rec.cpu[d].l = Math.max(0, Number(src.l) || 0);
+        });
+      }
+      if (raw) rec.pvp = Math.max(0, Number(raw.pvp) || 0);
+    } catch (e) {}
+    return rec;
+  }
+
+  function saveRecord(rec) {
+    try { localStorage.setItem(RECORD_KEY, JSON.stringify(rec)); } catch (e) {}
+  }
+
+  function recordResult() {
+    var rec = loadRecord();
+    if (isCpuMode()) {
+      var entry = rec.cpu[state.difficulty];
+      if (!entry) return;
+      if (state.players[state.winner].isCpu) entry.l += 1;
+      else entry.w += 1;
+    } else {
+      rec.pvp += 1;
+    }
+    saveRecord(rec);
+  }
+
+  function recordSummary(rec) {
+    var parts = [];
+    Object.keys(rec.cpu).forEach(function (d) {
+      var e = rec.cpu[d];
+      if (e.w || e.l) parts.push(DIFF_LABELS[d] + " " + e.w + "–" + e.l);
+    });
+    return parts.length ? "Tu récord vs CPU (victorias–derrotas): " + parts.join(" · ") : "";
+  }
+
+  function renderRecordLine() {
+    var el = $("#record-line");
+    if (!el) return;
+    var text = recordSummary(loadRecord());
+    el.textContent = text;
+    el.hidden = !text;
   }
 
   function emptyStats() {
@@ -365,8 +425,14 @@
     },
   };
 
+  var VIBRATION = { hit: 35, sunk: [60, 40, 140], lose: [120, 60, 120] };
+
   function playSfx(name) {
     if (prefs.mute) return;
+    // Vibración ligera en móviles (se desactiva junto con el sonido)
+    if (VIBRATION[name] && navigator.vibrate) {
+      try { navigator.vibrate(VIBRATION[name]); } catch (e) {}
+    }
     var fn = SFX[name];
     if (fn) {
       try { fn(); } catch (e) {}
@@ -1072,7 +1138,7 @@
     state.turnCount = data.turnCount || 0;
     state.battle.awaitingHandoff = false;
     state.battle.inputLocked = false;
-    state.battle.attacker = (data.battle && data.battle.attacker) || 0;
+    state.battle.attacker = data.battle && data.battle.attacker === 1 ? 1 : 0;
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
     state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
     state.battle.turnCounted = !!(data.battle && data.battle.turnCounted);
@@ -1560,6 +1626,14 @@
   }
 
   // ——— Batalla ———
+  function shipDots(length) {
+    return (
+      '<span class="len-dots" aria-label="' + length + ' casillas">' +
+      new Array(length + 1).join('<span class="len-dot"></span>') +
+      "</span>"
+    );
+  }
+
   function fleetStatusHtml(ships, showHits) {
     return ships
       .map(function (s) {
@@ -1571,7 +1645,7 @@
           '"></span><span>' +
           escapeHtml(s.name) +
           '</span></span><span class="status-tag">' +
-          (s.sunk ? "Hundido" : showHits ? s.hits + "/" + s.length : "En juego") +
+          (s.sunk ? "Hundido" : showHits ? s.hits + "/" + s.length : shipDots(s.length)) +
           "</span></li>"
         );
       })
@@ -1604,6 +1678,8 @@
       shots: state.players[viewer].shots,
       interactive: !!canShoot,
       onCellClick: onFireClick,
+      onCellHover: canShoot ? paintCrosshair : null,
+      onCellLeave: canShoot ? clearCrosshair : null,
       lastShot: last && last.by === viewer ? last : null,
     });
     $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[viewer].ships, true);
@@ -1672,6 +1748,20 @@
     renderBattleBoards(viewer, !isCpuTurn);
   }
 
+  // Resalta fila y columna de la casilla apuntada en el tablero enemigo
+  function clearCrosshair() {
+    document.querySelectorAll("#enemy-board .cell.crosshair").forEach(function (el) {
+      el.classList.remove("crosshair");
+    });
+  }
+
+  function paintCrosshair(r, c) {
+    clearCrosshair();
+    document
+      .querySelectorAll('#enemy-board .cell[data-r="' + r + '"], #enemy-board .cell[data-c="' + c + '"]')
+      .forEach(function (el) { el.classList.add("crosshair"); });
+  }
+
   function shotAnimation(el, result) {
     if (result === "miss") animateCell(el, "anim-splash", 550);
     else if (result === "hit") animateCell(el, "anim-boom", 450);
@@ -1732,6 +1822,7 @@
   function afterShot(attacker, result) {
     if (result.win) {
       state.winner = attacker;
+      recordResult();
       clearSave();
       later(showWin, 1000);
       return;
@@ -1841,6 +1932,16 @@
 
     var statsEl = $("#win-stats");
     statsEl.innerHTML = block(state.players[0]) + block(state.players[1]);
+
+    var recEl = $("#win-record");
+    if (recEl) {
+      var rec = loadRecord();
+      var e = isCpuMode() && rec.cpu[state.difficulty];
+      recEl.textContent = e
+        ? "Récord en " + DIFF_LABELS[state.difficulty] + ": " + e.w + " victorias · " + e.l + " derrotas"
+        : "";
+      recEl.hidden = !e;
+    }
 
     showScreen("win");
     playSfx(humanLost ? "lose" : "win");
@@ -1965,6 +2066,7 @@
     updateContinueUI();
     applyStartFormFromPrefs();
     renderFleetPreview();
+    renderRecordLine();
   }
 
   function applyTheme(theme) {
@@ -2235,6 +2337,7 @@
     renderFleetPreview();
     bindEvents();
     updateContinueUI();
+    renderRecordLine();
     showScreen("start");
     showHud(true);
   }
