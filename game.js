@@ -134,9 +134,10 @@
       awaitingHandoff: false,
       lastResult: null,
       lastShot: null,
+      turnCounted: false,
       inputLocked: false,
     },
-    cpu: { huntQueue: [], huntHits: [], huntDir: null },
+    cpu: { huntQueue: [], huntHits: [] },
     winner: null,
     turnCount: 0,
   };
@@ -144,6 +145,8 @@
   let placePreview = { cells: null, valid: false };
   let theaterTimer = null;
   let confirmingPlacement = false;
+  let handoffShownAt = 0;
+  const HANDOFF_GUARD_MS = 700;
 
   // Temporizadores ligados a la partida en curso: se cancelan al salir o empezar otra,
   // para que un disparo/turno pendiente no se ejecute sobre una partida distinta.
@@ -178,13 +181,16 @@
   function companyColor(id) { return COMPANY_COLORS[id] || "#67e8f9"; }
 
   function showScreen(name) {
+    var changed = !screens[name].classList.contains("active");
     Object.values(screens).forEach(function (el) { el.classList.remove("active"); });
     screens[name].classList.add("active");
     state.phase = name === "placement" ? "place" : name;
     showHud(true);
     var menuBtn = $("#btn-menu");
     if (menuBtn) menuBtn.hidden = name === "start";
-    try { window.scrollTo(0, 0); } catch (e) {}
+    if (changed) {
+      try { window.scrollTo(0, 0); } catch (e) {}
+    }
   }
 
   function showHud(visible) {
@@ -337,6 +343,14 @@
       });
       tone(ctx, 659, t + 0.5, 0.35, "sine", 0.1);
     },
+    lose: function () {
+      var ctx = ensureAudio();
+      if (!ctx) return;
+      var t = ctx.currentTime;
+      [392, 330, 262, 196].forEach(function (f, i) {
+        tone(ctx, f, t + i * 0.18, 0.3, "triangle", 0.1);
+      });
+    },
     place: function () {
       var ctx = ensureAudio();
       if (!ctx) return;
@@ -448,10 +462,10 @@
 
   // ——— Animaciones ———
   function findEnemyCell(r, c) {
-    return document.querySelector('#enemy-board .cell[data-r="' + r + '"][data-c="' + c + '"]');
+    return document.querySelector("#enemy-board " + cellSelector(r, c));
   }
   function findOwnCell(r, c) {
-    return document.querySelector('#own-board .cell[data-r="' + r + '"][data-c="' + c + '"]');
+    return document.querySelector("#own-board " + cellSelector(r, c));
   }
 
   function animateCell(el, className, ms) {
@@ -687,7 +701,9 @@
     }
   }
 
+  // Coloca al azar sin tocar la colocación que se esté mostrando en pantalla
   function placeFleetRandomForPlayer(playerIndex) {
+    var visiblePlacing = state.placing;
     state.placing = {
       playerIndex: playerIndex,
       selectedShipId: null,
@@ -702,6 +718,7 @@
       state.spacing = was;
     }
     commitPlacement(playerIndex);
+    state.placing = visiblePlacing;
   }
 
   // ——— Disparos ———
@@ -757,7 +774,7 @@
 
   // ——— CPU ———
   function resetCpuAi() {
-    state.cpu = { huntQueue: [], huntHits: [], huntDir: null };
+    state.cpu = { huntQueue: [], huntHits: [] };
   }
 
   function inBounds(r, c) {
@@ -820,7 +837,6 @@
       // Si quedan impactos de otro barco sin hundir, seguir cazándolo
       state.cpu.huntQueue = [];
       state.cpu.huntHits = openHits(attackerIndex);
-      state.cpu.huntDir = null;
       state.cpu.huntHits.forEach(function (h) {
         enqueueHuntAround(h.r, h.c, attackerIndex);
       });
@@ -980,6 +996,7 @@
         attacker: state.battle.attacker,
         lastResult: state.battle.lastResult,
         lastShot: state.battle.lastShot,
+        turnCounted: state.battle.turnCounted,
       },
       cpu: state.cpu,
       winner: state.winner,
@@ -1047,7 +1064,10 @@
         stats: p.stats || emptyStats(),
       };
     });
-    state.cpu = data.cpu || { huntQueue: [], huntHits: [], huntDir: null };
+    resetCpuAi();
+    if (data.cpu && Array.isArray(data.cpu.huntQueue) && Array.isArray(data.cpu.huntHits)) {
+      state.cpu = { huntQueue: data.cpu.huntQueue, huntHits: data.cpu.huntHits };
+    }
     state.winner = null;
     state.turnCount = data.turnCount || 0;
     state.battle.awaitingHandoff = false;
@@ -1055,6 +1075,7 @@
     state.battle.attacker = (data.battle && data.battle.attacker) || 0;
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
     state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
+    state.battle.turnCounted = !!(data.battle && data.battle.turnCounted);
 
     if (data.phase === "place") {
       state.placing = data.placing;
@@ -1076,9 +1097,8 @@
       }
     } else if (data.phase === "battle") {
       var attacker = state.battle.attacker;
-      var resumed = state.turnCount > 0;
       if (isCpuMode()) {
-        showBattleFor(attacker, resumed);
+        showBattleFor(attacker);
         if (state.players[attacker].isCpu) scheduleCpuTurn();
       } else {
         showHandoff(
@@ -1086,7 +1106,7 @@
           "Le toca disparar a <strong>" +
             escapeHtml(playerLabel(attacker)) +
             "</strong>.<br>Entrégale el dispositivo y pulsa <strong>Listo</strong>.",
-          function () { showBattleFor(attacker, resumed); }
+          function () { showBattleFor(attacker); }
         );
       }
     }
@@ -1153,7 +1173,7 @@
     container.addEventListener("click", function (e) {
       var el = cellFromEvent(container, e);
       var o = container._opts;
-      if (!el || !o || !o.interactive || !el.classList.contains("interactive")) return;
+      if (!el || !o || !o.interactive) return;
       if (o.onCellClick) o.onCellClick(Number(el.dataset.r), Number(el.dataset.c));
     });
 
@@ -1172,6 +1192,7 @@
     });
 
     container.addEventListener("focusin", function (e) {
+      if (container._restoringFocus) return;
       var el = cellFromEvent(container, e);
       var o = container._opts;
       if (el && o && o.onCellHover) o.onCellHover(Number(el.dataset.r), Number(el.dataset.c));
@@ -1185,9 +1206,7 @@
       var c = Number(el.dataset.c);
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (o.interactive && el.classList.contains("interactive") && o.onCellClick) {
-          o.onCellClick(r, c);
-        }
+        if (o.interactive && o.onCellClick) o.onCellClick(r, c);
         return;
       }
       var moves = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -1222,50 +1241,46 @@
     var n = boardSize();
     var letters = cols();
 
-    // Conservar el foco del teclado entre renders
+    // Recordar la casilla con foco: si este render la deja sin foco (p. ej. el
+    // tablero enemigo pasa a no interactivo tras disparar), se recupera en el
+    // siguiente render interactivo para no volver a empezar desde A1.
     var active = document.activeElement;
-    var focusR = null;
-    var focusC = null;
-    if (active && container.contains(active) && active.classList.contains("cell")) {
-      focusR = active.dataset.r;
-      focusC = active.dataset.c;
-    }
+    var hadFocus = !!(active && container.contains(active) && active.classList.contains("cell"));
+    if (hadFocus) container._pendingFocus = { r: active.dataset.r, c: active.dataset.c };
 
     container._opts = options;
     bindBoardEvents(container);
 
     container.innerHTML = "";
     container.style.setProperty("--board-n", String(n));
-    // El último término garantiza que el tablero quepa a lo ancho en móviles
-    container.style.setProperty(
-      "--cell",
-      "min(36px, " +
-        (mode === "place" ? "7.2vw" : n <= 8 ? "7vw" : "6.2vw") +
-        ", calc((100vw - 6.5rem) / " + n + " - 4px))"
-    );
 
     var frag = document.createDocumentFragment();
+    var header = document.createElement("div");
+    header.className = "board-row";
+    header.setAttribute("aria-hidden", "true");
     var corner = document.createElement("div");
     corner.className = "corner";
-    frag.appendChild(corner);
-
+    header.appendChild(corner);
     letters.forEach(function (letter) {
       var lab = document.createElement("div");
       lab.className = "label";
       lab.textContent = letter;
-      lab.setAttribute("aria-hidden", "true");
-      frag.appendChild(lab);
+      header.appendChild(lab);
     });
+    frag.appendChild(header);
 
     var previewSet = {};
     (previewCells || []).forEach(function (p) { previewSet[key(p.r, p.c)] = true; });
 
     for (var r = 0; r < n; r++) {
+      var row = document.createElement("div");
+      row.className = "board-row";
+      row.setAttribute("role", "row");
       var rowLab = document.createElement("div");
       rowLab.className = "label";
       rowLab.textContent = String(r + 1);
       rowLab.setAttribute("aria-hidden", "true");
-      frag.appendChild(rowLab);
+      row.appendChild(rowLab);
 
       for (var c = 0; c < n; c++) {
         var cell = document.createElement("div");
@@ -1281,7 +1296,7 @@
         if ((mode === "place" || mode === "own") && occupied && occupied[k]) {
           cell.classList.add("ship");
           cell.style.setProperty("--ship-color", companyColor(occupied[k]));
-          if (mode === "place") labelParts.push("barco");
+          labelParts.push("barco");
         }
 
         if (mode === "place" && previewSet[k]) {
@@ -1303,19 +1318,28 @@
         }
 
         cell.setAttribute("aria-label", labelParts.join(", "));
-        frag.appendChild(cell);
+        row.appendChild(cell);
       }
+      frag.appendChild(row);
     }
     container.appendChild(frag);
 
     if (interactive) {
       // Una sola parada de Tab por tablero; las flechas mueven dentro de él
-      var again = focusR !== null ? container.querySelector(cellSelector(focusR, focusC)) : null;
-      var entry = again || container.querySelector(".cell.interactive") || container.querySelector(".cell");
+      var pend = container._pendingFocus;
+      var target = pend ? container.querySelector(cellSelector(pend.r, pend.c)) : null;
+      var entry = target || container.querySelector(".cell.interactive") || container.querySelector(".cell");
       if (entry) entry.tabIndex = 0;
-      if (again) again.focus({ preventScroll: true });
+      var nothingFocused = !document.activeElement || document.activeElement === document.body;
+      if (target && (hadFocus || nothingFocused)) {
+        container._restoringFocus = true;
+        target.focus({ preventScroll: true });
+        container._restoringFocus = false;
+      }
+      container._pendingFocus = null;
     }
   }
+
 
   function updatePlacementHint() {
     var hint = $("#placement-hint");
@@ -1376,12 +1400,14 @@
 
   function renderPlacement() {
     var list = $("#ship-list");
+    var focusedShip = list.contains(document.activeElement) ? document.activeElement.dataset.ship : null;
     list.innerHTML = "";
 
     state.placing.ships.forEach(function (ship) {
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "ship-item";
+      btn.dataset.ship = ship.id;
       btn.style.setProperty("--ship-color", companyColor(ship.id));
       if (ship.cells.length) {
         btn.classList.add("placed");
@@ -1423,6 +1449,10 @@
       });
       list.appendChild(btn);
     });
+    if (focusedShip) {
+      var refocus = list.querySelector('[data-ship="' + focusedShip + '"]');
+      if (refocus) refocus.focus({ preventScroll: true });
+    }
 
     renderPlacementBoardOnly();
     $("#btn-confirm-placement").disabled = !allShipsPlaced();
@@ -1465,7 +1495,8 @@
   function onPlaceHover(r, c) {
     var id = state.placing.selectedShipId;
     var ship = id && state.placing.ships.find(function (s) { return s.id === id; });
-    if (!ship || ship.cells.length) {
+    // Sobre un barco ya colocado no se previsualiza: un clic ahí lo recoge
+    if (!ship || ship.cells.length || state.placing.occupied[key(r, c)]) {
       placePreview = { cells: null, valid: false };
     } else {
       var cells = getShipCells(r, c, ship.length, state.placing.orientation);
@@ -1521,9 +1552,11 @@
     state.handoff = { title: title, message: message, nextAction: nextAction };
     $("#handoff-title").textContent = title;
     $("#handoff-msg").innerHTML = message;
+    // No enfocar "Listo": un Enter repetido del jugador anterior saltaría la
+    // pantalla de privacidad. Además se ignoran pulsaciones durante un instante.
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    handoffShownAt = Date.now();
     showScreen("handoff");
-    var ready = $("#btn-handoff-ready");
-    if (ready) ready.focus({ preventScroll: true });
   }
 
   // ——— Batalla ———
@@ -1588,6 +1621,7 @@
     state.battle.inputLocked = false;
     state.battle.lastResult = null;
     state.battle.lastShot = null;
+    state.battle.turnCounted = false;
     state.turnCount = 0;
     resetCpuAi();
   }
@@ -1598,14 +1632,15 @@
     saveGame();
   }
 
-  // resumed: true al reanudar una partida guardada (no cuenta un turno nuevo)
-  function showBattleFor(attackerIndex, resumed) {
+  function showBattleFor(attackerIndex) {
     state.battle.attacker = attackerIndex;
     state.battle.awaitingHandoff = false;
     state.battle.inputLocked = !!state.players[attackerIndex].isCpu;
-    if (!resumed) {
+    // Cada turno se cuenta una sola vez, aunque se reanude la partida a mitad
+    if (!state.battle.turnCounted) {
       state.players[attackerIndex].stats.turns += 1;
       state.turnCount += 1;
+      state.battle.turnCounted = true;
     }
     showScreen("battle");
 
@@ -1705,6 +1740,7 @@
     var next = opponentOf(attacker);
     // Guardar ya con el turno siguiente: si se recarga ahora, no se repite el disparo
     state.battle.attacker = next;
+    state.battle.turnCounted = false;
     state.battle.awaitingHandoff = true;
 
     if (isCpuMode()) {
@@ -1807,7 +1843,7 @@
     statsEl.innerHTML = block(state.players[0]) + block(state.players[1]);
 
     showScreen("win");
-    playSfx("win");
+    playSfx(humanLost ? "lose" : "win");
     if (!humanLost) spawnWinConfetti();
   }
 
@@ -1936,6 +1972,7 @@
   }
 
   function applyLargeText(on) {
+    document.documentElement.classList.toggle("large-text", !!on);
     document.body.classList.toggle("large-text", !!on);
     var btn = $("#btn-large-text");
     if (btn) btn.setAttribute("aria-pressed", on ? "true" : "false");
@@ -2095,6 +2132,7 @@
     });
 
     $("#btn-handoff-ready").addEventListener("click", function () {
+      if (Date.now() - handoffShownAt < HANDOFF_GUARD_MS) return;
       playSfx("click");
       var fn = state.handoff.nextAction;
       state.handoff.nextAction = null;
