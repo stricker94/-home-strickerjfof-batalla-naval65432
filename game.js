@@ -1356,6 +1356,7 @@
   function pickUpShip(shipId) {
     var ship = state.placing.ships.find(function (s) { return s.id === shipId; });
     if (!ship || !ship.cells.length) return;
+    if (confirmingPlacement) return;
     if (ship.cells.length > 1) {
       state.placing.orientation = ship.cells[0].r === ship.cells[1].r ? "H" : "V";
     }
@@ -1467,6 +1468,7 @@
   }
 
   function onPlaceClick(r, c) {
+    if (confirmingPlacement) return;
     var occupant = state.placing.occupied[key(r, c)];
     if (occupant) {
       // Clic sobre un barco colocado: recogerlo para moverlo
@@ -1496,6 +1498,7 @@
   }
 
   function toggleOrientation() {
+    if (confirmingPlacement) return;
     state.placing.orientation = state.placing.orientation === "H" ? "V" : "H";
     toast(
       state.placing.orientation === "H" ? "Orientación: horizontal" : "Orientación: vertical",
