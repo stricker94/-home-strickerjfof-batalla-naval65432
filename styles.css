@@ -77,6 +77,11 @@ body.large-text {
   padding: 0;
 }
 
+/* El atributo hidden debe ganar a los display:flex/grid de las clases */
+[hidden] {
+  display: none !important;
+}
+
 html {
   font-size: var(--base-font);
   -webkit-tap-highlight-color: transparent;
@@ -712,7 +717,6 @@ body.large-text #app {
   gap: 1rem;
   margin-bottom: 1.35rem;
   padding: 0.95rem 1.15rem;
-  padding-right: calc(8.5rem + 0.5rem);
   background: var(--bg-card);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -1655,5 +1659,34 @@ body.large-text .board .label {
 @media (max-width: 600px) {
   #app {
     padding-top: 6.2rem;
+  }
+}
+
+/* Colocación en móvil: tablero primero y lista de barcos compacta */
+@media (max-width: 900px) {
+  .placement-layout .board-wrap {
+    order: -1;
+    padding: 0.6rem;
+  }
+
+  .ship-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+
+  .ship-item {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .board-panel {
+    padding: 0.8rem 0.6rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .board {
+    --gap: 3px;
+    grid-template-columns: 22px repeat(var(--board-n), var(--cell));
+    grid-template-rows: 22px repeat(var(--board-n), var(--cell));
   }
 }

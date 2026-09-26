@@ -1236,9 +1236,12 @@
 
     container.innerHTML = "";
     container.style.setProperty("--board-n", String(n));
+    // El último término garantiza que el tablero quepa a lo ancho en móviles
     container.style.setProperty(
       "--cell",
-      "min(36px, " + (mode === "place" ? "7.2vw" : n <= 8 ? "7vw" : "6.2vw") + ")"
+      "min(36px, " +
+        (mode === "place" ? "7.2vw" : n <= 8 ? "7vw" : "6.2vw") +
+        ", calc((100vw - 6.5rem) / " + n + " - 4px))"
     );
 
     var frag = document.createDocumentFragment();
