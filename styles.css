@@ -1891,3 +1891,78 @@ body.large-text .board .label {
     inset 0 0 0 2px var(--ship-color),
     0 0 12px var(--hit-glow);
 }
+
+/* Cabecera del tablero enemigo con el botón de ayuda de puntería */
+.board-panel-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  width: 100%;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.board-panel-head h3 {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.btn-chip {
+  flex: none;
+  margin-bottom: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  min-height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.45);
+  color: var(--mist);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-chip:hover {
+  border-color: var(--accent);
+  color: var(--foam);
+}
+
+.btn-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-chip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--warn) 22%, rgba(15, 23, 42, 0.6));
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* Mapa de probabilidad: cuanto más intenso, más probable que haya barco */
+.cell.heat::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--warn);
+  opacity: calc(0.05 + var(--heat, 0) * 0.6);
+  pointer-events: none;
+}
+
+.cell.heat.heat-top {
+  border-color: var(--warn);
+  box-shadow: inset 0 0 0 1px var(--warn), 0 0 10px rgba(251, 191, 36, 0.35);
+}
+
+/* Nuevo récord personal en la pantalla final */
+.new-best {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.16);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  color: var(--warn);
+  font-weight: 800;
+}
