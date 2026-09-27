@@ -58,6 +58,7 @@
     mute: false,
     music: false,
     largeText: false,
+    heatmap: false,
   };
 
   // Valores permitidos para las preferencias (evita datos corruptos en localStorage)
@@ -101,11 +102,30 @@
   }
 
   // ——— Récord (victorias/derrotas contra la CPU y partidas a 2) ———
+  // Por dificultad: victorias, derrotas, racha actual de victorias, mejor racha,
+  // y por tamaño de tablero la victoria con menos disparos y la más rápida (ms).
+  // 0 = sin marca aún.
+  function emptyCpuRecord() {
+    return { w: 0, l: 0, streak: 0, bestStreak: 0, fewest: 0, fastest: 0, fewestR: 0, fastestR: 0 };
+  }
+
+  // Campos de las marcas del tablero actual (normal 10×10 o rápida 8×8)
+  function markFields() {
+    return state.boardMode === "rapida"
+      ? { fewest: "fewestR", fastest: "fastestR" }
+      : { fewest: "fewest", fastest: "fastest" };
+  }
+
   function emptyRecord() {
     return {
-      cpu: { easy: { w: 0, l: 0 }, medium: { w: 0, l: 0 }, hard: { w: 0, l: 0 } },
+      cpu: { easy: emptyCpuRecord(), medium: emptyCpuRecord(), hard: emptyCpuRecord() },
       pvp: 0,
     };
+  }
+
+  function countField(v) {
+    var n = Math.floor(Number(v));
+    return isFinite(n) && n > 0 ? n : 0;
   }
 
   function loadRecord() {
@@ -115,11 +135,10 @@
       if (raw && raw.cpu) {
         Object.keys(rec.cpu).forEach(function (d) {
           var src = raw.cpu[d] || {};
-          rec.cpu[d].w = Math.max(0, Number(src.w) || 0);
-          rec.cpu[d].l = Math.max(0, Number(src.l) || 0);
+          Object.keys(rec.cpu[d]).forEach(function (f) { rec.cpu[d][f] = countField(src[f]); });
         });
       }
-      if (raw) rec.pvp = Math.max(0, Number(raw.pvp) || 0);
+      if (raw) rec.pvp = countField(raw.pvp);
     } catch (e) {}
     return rec;
   }
@@ -128,13 +147,37 @@
     try { localStorage.setItem(RECORD_KEY, JSON.stringify(rec)); } catch (e) {}
   }
 
+  // Marcas que se superaron en la última partida (para destacarlas al terminar)
+  var newBests = {};
+
   function recordResult() {
+    newBests = {};
     var rec = loadRecord();
     if (isCpuMode()) {
       var entry = rec.cpu[state.difficulty];
       if (!entry) return;
-      if (state.players[state.winner].isCpu) entry.l += 1;
-      else entry.w += 1;
+      if (state.players[state.winner].isCpu) {
+        entry.l += 1;
+        entry.streak = 0;
+      } else {
+        entry.w += 1;
+        entry.streak += 1;
+        if (entry.streak > entry.bestStreak) {
+          entry.bestStreak = entry.streak;
+          if (entry.streak > 1) newBests.streak = true;
+        }
+        var f = markFields();
+        var shots = state.players[0].stats.shots;
+        if (shots > 0 && (!entry[f.fewest] || shots < entry[f.fewest])) {
+          if (entry[f.fewest]) newBests.fewest = true;
+          entry[f.fewest] = shots;
+        }
+        var ms = Math.round(state.battle.elapsed);
+        if (ms >= 1000 && (!entry[f.fastest] || ms < entry[f.fastest])) {
+          if (entry[f.fastest]) newBests.fastest = true;
+          entry[f.fastest] = ms;
+        }
+      }
     } else {
       rec.pvp += 1;
     }
@@ -145,7 +188,9 @@
     var parts = [];
     Object.keys(rec.cpu).forEach(function (d) {
       var e = rec.cpu[d];
-      if (e.w || e.l) parts.push(DIFF_LABELS[d] + " " + e.w + "–" + e.l);
+      if (e.w || e.l) {
+        parts.push(DIFF_LABELS[d] + " " + e.w + "–" + e.l + (e.streak > 1 ? " (racha " + e.streak + ")" : ""));
+      }
     });
     var lines = [];
     if (parts.length) lines.push("Tu récord vs CPU (victorias–derrotas): " + parts.join(" · "));
@@ -251,6 +296,30 @@
   function clearGameTimers() {
     gameTimers.forEach(function (id) { clearTimeout(id); });
     gameTimers = [];
+    if (visibleWaiter) {
+      document.removeEventListener("visibilitychange", visibleWaiter);
+      visibleWaiter = null;
+    }
+  }
+
+  // Ejecuta fn cuando la página esté visible (p. ej. la CPU no dispara con la
+  // pestaña o la app en segundo plano: el jugador se perdería el disparo).
+  // Se cancela con clearGameTimers como los demás temporizadores de la partida.
+  let visibleWaiter = null;
+
+  function whenVisible(fn) {
+    if (!document.hidden) {
+      fn();
+      return;
+    }
+    if (visibleWaiter) document.removeEventListener("visibilitychange", visibleWaiter);
+    visibleWaiter = function () {
+      if (document.hidden) return;
+      document.removeEventListener("visibilitychange", visibleWaiter);
+      visibleWaiter = null;
+      later(fn, 500);
+    };
+    document.addEventListener("visibilitychange", visibleWaiter);
   }
 
   const $ = function (sel) { return document.querySelector(sel); };
@@ -985,10 +1054,12 @@
     }
   }
 
-  // IA difícil: mapa de probabilidad. Para cada barco enemigo aún a flote cuenta
-  // cuántas colocaciones posibles cubren cada casilla libre; si hay impactos
-  // pendientes, sólo cuenta las colocaciones que pasan por ellos (y las pondera).
-  function chooseHardShot(attackerIndex) {
+  // Mapa de probabilidad: para cada barco enemigo aún a flote cuenta cuántas
+  // colocaciones posibles cubren cada casilla libre; si hay impactos pendientes,
+  // sólo cuenta las colocaciones que pasan por ellos (y las pondera). Usa sólo
+  // lo que el atacante sabe: sus disparos y qué barcos siguen a flote.
+  // Devuelve { "r,c": peso } o null si no queda ninguna colocación posible.
+  function probabilityWeights(attackerIndex) {
     var shots = state.players[attackerIndex].shots;
     var defender = opponentOf(attackerIndex);
     var n = boardSize();
@@ -1000,18 +1071,9 @@
     Object.keys(shots).forEach(function (k) {
       if (shots[k] === "miss" || shots[k] === "sunk") blocked[k] = true;
     });
-    if (state.spacing) {
-      // Con barcos separados, ninguna casilla alrededor de un hundido puede tener barco
-      Object.keys(shots).forEach(function (k) {
-        if (shots[k] !== "sunk") return;
-        var p = parseKey(k);
-        for (var dr = -1; dr <= 1; dr++) {
-          for (var dc = -1; dc <= 1; dc++) {
-            if (inBounds(p.r + dr, p.c + dc)) blocked[key(p.r + dr, p.c + dc)] = true;
-          }
-        }
-      });
-    }
+    // Con barcos separados, ninguna casilla alrededor de un hundido puede tener barco
+    var ruled = ruledOutCells(shots);
+    Object.keys(ruled).forEach(function (k) { blocked[k] = true; });
 
     function buildWeights(targeting) {
       var weights = {};
@@ -1046,7 +1108,12 @@
     }
 
     var hasHits = Object.keys(shots).some(function (k) { return shots[k] === "hit"; });
-    var weights = (hasHits && buildWeights(true)) || buildWeights(false);
+    return (hasHits && buildWeights(true)) || buildWeights(false);
+  }
+
+  // IA difícil: dispara a la casilla más probable del mapa de probabilidad
+  function chooseHardShot(attackerIndex) {
+    var weights = probabilityWeights(attackerIndex);
     if (!weights) return pickRandom(unshotCells(attackerIndex));
 
     var best = [];
@@ -1399,6 +1466,7 @@
     var previewValid = options.previewValid;
     var lastShot = options.lastShot;
     var ruledOut = options.ruledOut || {};
+    var heat = options.heat || null;
     var sunkShips = options.sunkShips || occupied || {};
     var n = boardSize();
     var letters = cols();
@@ -1481,6 +1549,14 @@
           if (mode === "enemy" && !shot && ruledOut[k]) {
             cell.classList.add("ruled-out");
             labelParts.push("descartada");
+          }
+          if (heat && !shot && !ruledOut[k] && heat.weights[k]) {
+            cell.classList.add("heat");
+            cell.style.setProperty("--heat", heatLevel(heat, heat.weights[k]).toFixed(3));
+            if (heat.weights[k] === heat.max) {
+              cell.classList.add("heat-top");
+              labelParts.push("más probable");
+            }
           }
           if (lastShot && lastShot.r === r && lastShot.c === c) cell.classList.add("last-shot");
         }
@@ -1792,6 +1868,7 @@
       mode: "enemy",
       shots: state.players[viewer].shots,
       ruledOut: ruledOutCells(state.players[viewer].shots),
+      heat: canShoot && prefs.heatmap ? heatFor(viewer) : null,
       sunkShips: occupiedMap(state.players[enemy].ships.filter(function (s) { return s.sunk; })),
       interactive: !!canShoot,
       onCellClick: onFireClick,
@@ -1803,6 +1880,43 @@
     $("#enemy-fleet-label").textContent = "Flota de " + state.players[enemy].name + afloatText(state.players[enemy].ships);
     $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[viewer].ships, true);
     $("#enemy-fleet-status").innerHTML = fleetStatusHtml(state.players[enemy].ships, false);
+  }
+
+  // Ayuda de puntería: pesos del mapa de probabilidad y su rango, para
+  // colorear cada casilla según lo cerca que esté de la más probable
+  function heatFor(attackerIndex) {
+    var weights = probabilityWeights(attackerIndex);
+    if (!weights) return null;
+    var max = 0;
+    var min = Infinity;
+    Object.keys(weights).forEach(function (k) {
+      if (weights[k] > max) max = weights[k];
+      if (weights[k] < min) min = weights[k];
+    });
+    return max > 0 ? { weights: weights, max: max, min: min } : null;
+  }
+
+  function heatLevel(heat, w) {
+    if (heat.max === heat.min) return 0.5;
+    var t = (w - heat.min) / (heat.max - heat.min);
+    return t * t;
+  }
+
+  function updateHeatmapButton(visible) {
+    var btn = $("#btn-heatmap");
+    if (!btn) return;
+    if (typeof visible === "boolean") btn.hidden = !visible;
+    btn.setAttribute("aria-pressed", prefs.heatmap ? "true" : "false");
+  }
+
+  function toggleHeatmap() {
+    prefs.heatmap = !prefs.heatmap;
+    savePrefs();
+    updateHeatmapButton();
+    var canShoot = state.phase === "battle" && !state.battle.inputLocked && !state.battle.awaitingHandoff &&
+      !state.players[state.battle.attacker].isCpu;
+    if (canShoot) renderBattleBoards(battleViewer(state.battle.attacker), true);
+    toast(prefs.heatmap ? "Ayuda de puntería activada" : "Ayuda de puntería desactivada", 1300);
   }
 
   // En modo CPU la vista es siempre la del humano (jugador 0)
@@ -1873,6 +1987,7 @@
     }
 
     renderBattleBoards(viewer, !isCpuTurn);
+    updateHeatmapButton(!isCpuTurn);
     renderHistory();
   }
 
@@ -2062,24 +2177,26 @@
   function scheduleCpuTurn() {
     state.battle.inputLocked = true;
     var delay = 650 + Math.random() * 450;
-    later(function () {
-      if (state.phase !== "battle") return;
-      var attacker = state.battle.attacker;
-      if (!state.players[attacker].isCpu) return;
+    later(function () { whenVisible(cpuFire); }, delay);
+  }
 
-      var target = chooseCpuShot(attacker);
+  function cpuFire() {
+    if (state.phase !== "battle") return;
+    var attacker = state.battle.attacker;
+    if (!state.players[attacker].isCpu) return;
+
+    var target = chooseCpuShot(attacker);
+    if (!target) return;
+    var result = fireShot(attacker, target.r, target.c);
+    if (!result.ok) {
+      target = pickRandom(unshotCells(attacker));
       if (!target) return;
-      var result = fireShot(attacker, target.r, target.c);
-      if (!result.ok) {
-        target = pickRandom(unshotCells(attacker));
-        if (!target) return;
-        result = fireShot(attacker, target.r, target.c);
-      }
-      if (!result.ok) return;
+      result = fireShot(attacker, target.r, target.c);
+    }
+    if (!result.ok) return;
 
-      applyShotFeedback(attacker, result);
-      afterShot(attacker, result);
-    }, delay);
+    applyShotFeedback(attacker, result);
+    afterShot(attacker, result);
   }
 
   function showWin() {
@@ -2117,16 +2234,36 @@
     if (recEl) {
       var rec = loadRecord();
       var e = isCpuMode() && rec.cpu[state.difficulty];
-      recEl.textContent = e
-        ? "Récord en " + DIFF_LABELS[state.difficulty] + ": " +
-          plural(e.w, "victoria", "victorias") + " · " + plural(e.l, "derrota", "derrotas")
-        : "";
+      recEl.innerHTML = e ? winRecordHtml(e) : "";
       recEl.hidden = !e;
     }
 
     showScreen("win");
     playSfx(humanLost ? "lose" : "win");
     if (!humanLost) spawnWinConfetti();
+  }
+
+  function winRecordHtml(e) {
+    var lines = [
+      "Récord en " + DIFF_LABELS[state.difficulty] + ": " +
+        plural(e.w, "victoria", "victorias") + " · " + plural(e.l, "derrota", "derrotas"),
+    ];
+    var marks = [];
+    if (e.streak > 0) marks.push("Racha actual: " + e.streak);
+    if (e.bestStreak > 1) marks.push("Mejor racha: " + e.bestStreak + (newBests.streak ? " ★" : ""));
+    if (marks.length) lines.push(marks.join(" · "));
+    var f = markFields();
+    var board = [];
+    if (e[f.fewest]) board.push("menos disparos " + e[f.fewest] + (newBests.fewest ? " ★" : ""));
+    if (e[f.fastest]) board.push("más rápida " + formatDuration(e[f.fastest]) + (newBests.fastest ? " ★" : ""));
+    if (board.length) {
+      lines.push("Mejor victoria en " + (state.boardMode === "rapida" ? "8×8" : "10×10") + ": " + board.join(" · "));
+    }
+    var html = lines.map(escapeHtml).join("<br>");
+    if (newBests.streak || newBests.fewest || newBests.fastest) {
+      html = '<span class="new-best">¡Nuevo récord personal!</span><br>' + html;
+    }
+    return html;
   }
 
   function formatDuration(ms) {
@@ -2450,6 +2587,11 @@
       playSfx("click");
     });
 
+    $("#btn-heatmap").addEventListener("click", function () {
+      playSfx("click");
+      toggleHeatmap();
+    });
+
     $("#btn-fullscreen").addEventListener("click", function () {
       playSfx("click");
       toggleFullscreen();
@@ -2534,6 +2676,13 @@
           if (tag === "INPUT" || tag === "TEXTAREA") return;
           e.preventDefault();
           toggleOrientation();
+        }
+      }
+      if ((e.key === "m" || e.key === "M") && state.phase === "battle" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        var btnHeat = $("#btn-heatmap");
+        if (btnHeat && !btnHeat.hidden) {
+          e.preventDefault();
+          toggleHeatmap();
         }
       }
       if (e.key === "Escape") clearTheater();

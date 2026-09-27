@@ -193,7 +193,12 @@
 
       <div class="battle-layout">
         <div class="board-panel glass-panel">
-          <h3 id="enemy-board-label">Tablero enemigo</h3>
+          <div class="board-panel-head">
+            <h3 id="enemy-board-label">Tablero enemigo</h3>
+            <button type="button" id="btn-heatmap" class="btn-chip" aria-pressed="false" title="Colorea las casillas según la probabilidad de que haya un barco (tecla M)" hidden>
+              <span aria-hidden="true">🎯</span> Ayuda
+            </button>
+          </div>
           <div id="enemy-board" class="board board-enemy" role="grid" aria-label="Tablero enemigo"></div>
         </div>
         <div class="board-panel glass-panel">

@@ -12,9 +12,11 @@ Abre `index.html` en el navegador (doble clic o sirviendo la carpeta con cualqui
 - **Barcos separados:** opción para que los barcos no puedan tocarse, ni en diagonal. Al hundir un barco, las casillas de alrededor se marcan como descartadas.
 - **Disparo extra al acertar:** opción para volver a disparar cada vez que tocas o hundes un barco (también aplica a la CPU).
 - **Colocación:** elige un barco, gira con `R` y haz clic en el tablero. Haz clic en un barco ya colocado (en el tablero o en la lista) para moverlo. También hay botones *Aleatorio* y *Limpiar*.
-- **Teclado:** flechas para moverte por el tablero, `Enter`/`Espacio` para colocar o disparar, `R` para girar.
+- **Teclado:** flechas para moverte por el tablero, `Enter`/`Espacio` para colocar o disparar, `R` para girar, `M` para la ayuda de puntería.
 - **Guardado automático:** la partida se guarda en el navegador. Con el botón *Inicio* puedes salir y luego pulsar *Continuar partida*.
-- **Récord:** se guardan tus victorias y derrotas contra la CPU por dificultad y se muestran al inicio y al terminar.
+- **Récord:** se guardan tus victorias y derrotas contra la CPU por dificultad, tu racha de victorias y tu mejor victoria (menos disparos y más rápida) en cada tamaño de tablero. Al superar una marca se destaca como nuevo récord personal.
+- **Ayuda de puntería:** el botón *Ayuda* (o la tecla `M`) colorea el tablero enemigo según la probabilidad de que haya un barco en cada casilla, calculada sólo con tus disparos y los barcos que siguen a flote.
+- **Pausa en segundo plano:** si cambias de app o de pestaña durante el turno de la CPU, espera a que vuelvas para disparar.
 - **Ayudas visuales:** mira de fila y columna al apuntar, último disparo resaltado, tamaño y número de barcos enemigos que siguen a flote, y cada barco hundido con el color de su empresa.
 - **Historial de disparos:** lista desplegable con cada disparo de la partida.
 - **Tableros finales:** al terminar puedes ver dónde estaban todos los barcos de ambas flotas.
