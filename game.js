@@ -166,7 +166,7 @@
   }
 
   function emptyStats() {
-    return { shots: 0, hits: 0, shipsSunk: 0, turns: 0 };
+    return { shots: 0, hits: 0, shipsSunk: 0, turns: 0, streak: 0, best: 0 };
   }
 
   function createPlayer(name, isCpu) {
@@ -206,6 +206,7 @@
       turnCounted: false,
       inputLocked: false,
       history: [],
+      elapsed: 0,
     },
     cpu: { huntQueue: [], huntHits: [] },
     winner: null,
@@ -213,6 +214,16 @@
   };
 
   let placePreview = { cells: null, valid: false };
+  // Duración de la batalla: se suma el tiempo entre disparos, con un tope por
+  // disparo para no contar pantallas de "pasa el dispositivo" ni pausas largas.
+  let battleTickAt = 0;
+  const MAX_SHOT_GAP_MS = 90000;
+
+  function tickBattleClock() {
+    var now = Date.now();
+    if (battleTickAt) state.battle.elapsed += Math.min(now - battleTickAt, MAX_SHOT_GAP_MS);
+    battleTickAt = now;
+  }
   let theaterTimer = null;
   let confirmingPlacement = false;
   let handoffShownAt = 0;
@@ -818,15 +829,19 @@
 
     var shipId = state.players[defender].board[r][c];
     var stats = state.players[attackerIndex].stats;
+    tickBattleClock();
     stats.shots += 1;
 
     if (!shipId) {
+      stats.streak = 0;
       attackerShots[shotKey] = "miss";
       return { ok: true, result: "miss", cell: { r: r, c: c } };
     }
 
     attackerShots[shotKey] = "hit";
     stats.hits += 1;
+    stats.streak = (stats.streak || 0) + 1;
+    stats.best = Math.max(stats.best || 0, stats.streak);
     var ship = state.players[defender].ships.find(function (s) { return s.id === shipId; });
     ship.hits += 1;
 
@@ -1106,6 +1121,7 @@
         lastShot: state.battle.lastShot,
         turnCounted: state.battle.turnCounted,
         history: state.battle.history,
+        elapsed: state.battle.elapsed,
       },
       cpu: state.cpu,
       winner: state.winner,
@@ -1183,7 +1199,8 @@
         board: p.board,
         ships: p.ships || [],
         shots: p.shots || {},
-        stats: p.stats || emptyStats(),
+        // Completa campos nuevos (racha) en guardados de versiones anteriores
+        stats: Object.assign(emptyStats(), p.stats || {}),
       };
     });
     resetCpuAi();
@@ -1198,6 +1215,8 @@
     state.battle.lastResult = (data.battle && data.battle.lastResult) || null;
     state.battle.lastShot = (data.battle && data.battle.lastShot) || null;
     state.battle.history = sanitizeHistory(data.battle && data.battle.history);
+    var el = Number(data.battle && data.battle.elapsed);
+    state.battle.elapsed = isFinite(el) && el > 0 ? el : 0;
     if (data.battle && typeof data.battle.turnCounted === "boolean") {
       state.battle.turnCounted = data.battle.turnCounted;
     } else if (state.battle.lastResult) {
@@ -1380,6 +1399,7 @@
     var previewValid = options.previewValid;
     var lastShot = options.lastShot;
     var ruledOut = options.ruledOut || {};
+    var sunkShips = options.sunkShips || occupied || {};
     var n = boardSize();
     var letters = cols();
 
@@ -1449,7 +1469,14 @@
         if (mode === "own" || mode === "enemy") {
           if (shot === "miss") cell.classList.add("miss");
           if (shot === "hit") cell.classList.add("hit");
-          if (shot === "sunk") cell.classList.add("hit", "sunk");
+          if (shot === "sunk") {
+            cell.classList.add("hit", "sunk");
+            // Borde con el color de la empresa hundida para distinguir cada barco
+            if (sunkShips[k]) {
+              cell.classList.add("sunk-colored");
+              cell.style.setProperty("--ship-color", companyColor(sunkShips[k]));
+            }
+          }
           if (shot) labelParts.push(cellStateLabel(shot));
           if (mode === "enemy" && !shot && ruledOut[k]) {
             cell.classList.add("ruled-out");
@@ -1745,6 +1772,11 @@
     return map;
   }
 
+  function afloatText(ships) {
+    var left = ships.filter(function (s) { return !s.sunk; }).length;
+    return " · " + left + "/" + ships.length + " a flote";
+  }
+
   // viewer: jugador cuyo punto de vista se muestra (su flota abajo, el enemigo arriba)
   function renderBattleBoards(viewer, canShoot) {
     var enemy = opponentOf(viewer);
@@ -1760,12 +1792,15 @@
       mode: "enemy",
       shots: state.players[viewer].shots,
       ruledOut: ruledOutCells(state.players[viewer].shots),
+      sunkShips: occupiedMap(state.players[enemy].ships.filter(function (s) { return s.sunk; })),
       interactive: !!canShoot,
       onCellClick: onFireClick,
       onCellHover: canShoot ? paintCrosshair : null,
       onCellLeave: canShoot ? clearCrosshair : null,
       lastShot: last && last.by === viewer ? last : null,
     });
+    $("#own-fleet-label").textContent = "Tu flota" + afloatText(state.players[viewer].ships);
+    $("#enemy-fleet-label").textContent = "Flota de " + state.players[enemy].name + afloatText(state.players[enemy].ships);
     $("#own-fleet-status").innerHTML = fleetStatusHtml(state.players[viewer].ships, true);
     $("#enemy-fleet-status").innerHTML = fleetStatusHtml(state.players[enemy].ships, false);
   }
@@ -1783,6 +1818,7 @@
     state.battle.lastShot = null;
     state.battle.turnCounted = false;
     state.battle.history = [];
+    state.battle.elapsed = 0;
     state.turnCount = 0;
     resetCpuAi();
   }
@@ -1804,6 +1840,7 @@
       state.battle.turnCounted = true;
     }
     showScreen("battle");
+    battleTickAt = Date.now();
 
     var attacker = state.players[attackerIndex];
     var viewer = battleViewer(attackerIndex);
@@ -1823,8 +1860,8 @@
         : "Haz clic (o usa flechas + Enter) en el tablero enemigo para disparar.";
     $("#enemy-board-label").textContent = "Tablero de " + enemy.name;
     $("#own-board-label").textContent = "Tu flota (" + state.players[viewer].name + ")";
-    $("#own-fleet-label").textContent = "Tu flota";
-    $("#enemy-fleet-label").textContent = "Flota de " + enemy.name;
+    $("#own-fleet-label").textContent = "Tu flota" + afloatText(state.players[viewer].ships);
+    $("#enemy-fleet-label").textContent = "Flota de " + enemy.name + afloatText(enemy.ships);
 
     var log = $("#battle-log");
     log.className = "battle-log";
@@ -2052,7 +2089,8 @@
     $("#win-title").textContent = humanLost ? "Derrota" : "¡Victoria!";
     $(".win-trophy").textContent = humanLost ? "⚓" : "🏆";
     $("#win-msg").innerHTML =
-      "<strong>" + escapeHtml(w.name) + "</strong> hundió toda la flota enemiga.";
+      "<strong>" + escapeHtml(w.name) + "</strong> hundió toda la flota enemiga" +
+      (state.battle.elapsed >= 1000 ? " en " + formatDuration(state.battle.elapsed) : "") + ".";
 
     function block(p) {
       var st = p.stats || emptyStats();
@@ -2066,6 +2104,7 @@
         "<dt>Precisión</dt><dd>" + prec + "%</dd>" +
         "<dt>Barcos hundidos</dt><dd>" + st.shipsSunk + "</dd>" +
         "<dt>Turnos</dt><dd>" + st.turns + "</dd>" +
+        "<dt>Mejor racha de aciertos</dt><dd>" + (st.best || 0) + "</dd>" +
         "</dl></div>"
       );
     }
@@ -2088,6 +2127,13 @@
     showScreen("win");
     playSfx(humanLost ? "lose" : "win");
     if (!humanLost) spawnWinConfetti();
+  }
+
+  function formatDuration(ms) {
+    var total = Math.round(ms / 1000);
+    var m = Math.floor(total / 60);
+    var sec = total % 60;
+    return m ? m + "\u00a0min" + (sec ? " " + sec + "\u00a0s" : "") : sec + "\u00a0s";
   }
 
   // Tableros finales: cada flota con los disparos que recibió (revela lo no descubierto)
@@ -2376,6 +2422,8 @@
 
     $("#btn-new-game").addEventListener("click", function () {
       playSfx("click");
+      // Empezar de nuevo borra la partida guardada: pedir confirmación
+      if (hasValidSave() && !window.confirm("¿Empezar una partida nueva? Se perderá la partida guardada.")) return;
       clearSave();
       updateContinueUI();
       applyStartFormFromPrefs();

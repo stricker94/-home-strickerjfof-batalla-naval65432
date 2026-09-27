@@ -1883,3 +1883,11 @@ body.large-text .board .label {
     border-radius: 18px;
   }
 }
+
+/* Barco hundido: borde con el color de su empresa */
+.cell.sunk.sunk-colored {
+  border-color: var(--ship-color);
+  box-shadow:
+    inset 0 0 0 2px var(--ship-color),
+    0 0 12px var(--hit-glow);
+}

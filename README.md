@@ -15,9 +15,10 @@ Abre `index.html` en el navegador (doble clic o sirviendo la carpeta con cualqui
 - **Teclado:** flechas para moverte por el tablero, `Enter`/`Espacio` para colocar o disparar, `R` para girar.
 - **Guardado automático:** la partida se guarda en el navegador. Con el botón *Inicio* puedes salir y luego pulsar *Continuar partida*.
 - **Récord:** se guardan tus victorias y derrotas contra la CPU por dificultad y se muestran al inicio y al terminar.
-- **Ayudas visuales:** mira de fila y columna al apuntar, último disparo resaltado y tamaño de los barcos enemigos que siguen a flote.
+- **Ayudas visuales:** mira de fila y columna al apuntar, último disparo resaltado, tamaño y número de barcos enemigos que siguen a flote, y cada barco hundido con el color de su empresa.
 - **Historial de disparos:** lista desplegable con cada disparo de la partida.
 - **Tableros finales:** al terminar puedes ver dónde estaban todos los barcos de ambas flotas.
+- **Estadísticas finales:** disparos, precisión, mejor racha de aciertos y duración de la batalla.
 - **Instalable y sin conexión:** servido por http/https (por ejemplo GitHub Pages), el juego se puede instalar en el teléfono y funciona sin internet.
 - **Extras:** música y efectos generados con Web Audio, vibración en móviles, texto grande, pantalla completa y tres colores de acento.
 
