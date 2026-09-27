@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="Batalla Naval con flotas corporativas: 2 jugadores en el mismo dispositivo o contra la CPU." />
   <meta name="theme-color" content="#04101c" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <title>Batalla Naval — Empresas</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -90,6 +93,12 @@
             <input type="checkbox" id="opt-spacing" />
             <span>Barcos separados</span>
             <small>Sin tocar (incluye diagonales)</small>
+          </label>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="opt-extra-shot" />
+            <span>Disparo extra al acertar</span>
+            <small>Si tocas o hundes un barco, vuelves a disparar</small>
           </label>
 
           <fieldset class="opt-group">
@@ -195,6 +204,11 @@
 
       <div id="battle-log" class="battle-log" aria-live="polite"></div>
 
+      <details id="shot-history" class="shot-history glass-panel" hidden>
+        <summary>Historial de disparos <span id="shot-history-count" class="history-count"></span></summary>
+        <ol id="shot-history-list" class="shot-history-list" reversed></ol>
+      </details>
+
       <aside class="fleet-status">
         <div class="fleet-status-col glass-panel">
           <h4 id="own-fleet-label">Tu flota</h4>
@@ -214,6 +228,20 @@
         <h2 id="win-title">¡Victoria!</h2>
         <p id="win-msg" class="win-msg"></p>
         <div id="win-stats" class="win-stats"></div>
+        <details id="win-boards-wrap" class="win-boards-wrap">
+          <summary>Ver tableros finales</summary>
+          <p class="hint">Barcos sin tocar en color, disparos del rival marcados encima.</p>
+          <div class="win-boards">
+            <figure class="win-board-fig">
+              <figcaption id="win-board-0-label"></figcaption>
+              <div id="win-board-0" class="board board-mini" role="grid"></div>
+            </figure>
+            <figure class="win-board-fig">
+              <figcaption id="win-board-1-label"></figcaption>
+              <div id="win-board-1" class="board board-mini" role="grid"></div>
+            </figure>
+          </div>
+        </details>
         <p id="win-record" class="record-line" hidden></p>
         <button type="button" id="btn-rematch" class="btn btn-primary btn-lg">Revancha</button>
         <button type="button" id="btn-home" class="btn btn-ghost">Inicio</button>
