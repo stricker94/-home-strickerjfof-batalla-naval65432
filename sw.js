@@ -39,8 +39,11 @@ self.addEventListener("fetch", function (e) {
   var isFont = url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com";
   if (!sameOrigin && !isFont) return;
 
+  // Archivos del juego: se revalidan con el servidor (no-cache) para que una
+  // versión nueva llegue en la siguiente carga aunque el hosting mande max-age.
+  var net = sameOrigin ? fetch(req.url, { cache: "no-cache" }) : fetch(req);
   e.respondWith(
-    fetch(req).then(function (res) {
+    net.then(function (res) {
       if (res && (res.ok || res.type === "opaque")) {
         var copy = res.clone();
         caches.open(CACHE).then(function (cache) { cache.put(req, copy); });
